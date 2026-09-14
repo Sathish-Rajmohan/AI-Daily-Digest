@@ -202,6 +202,11 @@ ATTEMPTS_PER_MODEL = 3
 BACKOFF_BASE = 4
 REQUEST_TIMEOUT = 90
 
+# Headroom for the longest topic. A briefing runs well under this, but some
+# of these models spend output tokens on internal reasoning before the JSON,
+# so the ceiling needs to clear both.
+MAX_OUTPUT_TOKENS = 8192
+
 # Ceiling on the wall-clock time all summarization may take in one run.
 # Without it, a broad outage means every topic serially exhausts its own retry
 # budget and the job runs until the workflow timeout kills it mid-flight,
@@ -221,92 +226,138 @@ def build_model_chain():
 
 # Persona and standing rules live in systemInstruction, not the user turn.
 # Gemini processes system instructions before the request content, so they
-# don't compete with the article list for attention. The rules below are
-# literal numbered constraints ("at most N developments") instead of vague
-# guidance ("keep it short"), since Gemini follows concrete limits more
-# reliably.
-SYSTEM_INSTRUCTION = """You are a careful, neutral news editor producing one \
-synthesized briefing per topic for a personal daily digest. Each request \
-gives you a numbered list of recent articles, possibly from several \
-outlets, about one topic.
+# don't compete with the article list for attention. The rules are literal
+# numbered constraints ("about 15-20 words", "never past 25") rather than
+# vague guidance ("keep it readable"), since concrete limits are followed
+# far more reliably than adjectives. The worked example at the end targets
+# density directly, which is the failure mode plain instructions are worst
+# at preventing on their own.
+SYSTEM_INSTRUCTION = """You are a news editor writing a daily briefing for a \
+busy general reader. Each request gives you a numbered list of recent \
+articles, possibly from several outlets, about one topic. Your job is to \
+make that topic easy to skim and easy to follow.
 
-Rules, always in force:
+STRUCTURE
 
-1. Output exactly one briefing per the response schema. Never structure it \
-as a list of separate per-story summaries - that is the single failure \
-mode to avoid above everything else below.
-2. Treat two articles as covering "the same development" when they \
-describe the same underlying real-world event, decision, or announcement, \
-even if worded differently or from different outlets. Fuse same-development \
-articles into one thread and combine their detail into a fuller account \
-(who, what, where, why it matters, what happens next) instead of repeating \
-the same lead more than once.
-3. Write the summary as 3-5 short paragraphs of connected prose covering \
-the most significant distinct developments. Do not format it as a bulleted \
-or numbered list, and do not label or number individual stories within it.
-4. Use only the numbered articles given to you in this request. Do not draw \
-on outside or prior knowledge of the topic, even if you believe it to be \
-true or think it would round out the picture - if the given articles don't \
-say it, it does not go in the briefing.
-5. If articles disagree on a specific detail (a figure, a cause, an \
+1. Write "overview" as 2-3 sentences saying what matters most in this topic \
+today. Someone who reads only the overview should still come away knowing \
+the day's main points. Do not write a label or a throat-clearing preamble \
+like "Here is today's summary".
+2. Write one entry in "stories" for each distinct development, up to the \
+limit given in the request. Two articles describing the same underlying \
+event, decision, or announcement are ONE story, not two, even when the \
+outlets word it differently. Fuse them and combine their detail.
+3. "subheading" states plainly what happened, in under 10 words. Write it \
+the way a person would say it out loud. Good: "Ceasefire talks restart \
+after a week's pause". Bad: "Geopolitical Developments Update".
+4. "detail" is 2-3 short paragraphs on what happened, who it affects, and \
+why it matters. Separate paragraphs with a blank line. Do not repeat the \
+subheading as the first sentence.
+
+LANGUAGE
+
+5. Keep sentences short. Average about 15-20 words and never run past 25. \
+One idea per sentence.
+6. Use the active voice. Write "the central bank raised rates", not "rates \
+were raised by the central bank".
+7. Use everyday words. Where a technical term is genuinely unavoidable, \
+explain it in plain words in the same sentence the first time it appears.
+8. Use at most one subordinate clause per sentence. Split a long sentence \
+into two rather than joining the halves with a semicolon or a dash.
+9. Start each paragraph with its point and then support it. Do not build up \
+to the point.
+
+ACCURACY
+
+10. Use only the numbered articles given to you in this request. Do not draw \
+on outside or prior knowledge, even if you believe it to be true or think it \
+would round out the picture. If the given articles don't say it, it does not \
+go in the briefing.
+11. If articles disagree on a specific detail (a figure, a cause, an \
 attribution), say so briefly rather than silently picking one version.
-6. Every entry in "sources" must be the integer id of an article from the \
-numbered list that you actually drew a claim from. Never invent an id, and \
-never cite an id for a claim that specific article doesn't support. Choose \
-your sources deliberately, typically 3-8 of them, before writing the prose \
-in "summary" - do not write the narrative first and then guess citations \
-for it afterward.
-7. Stay neutral: describe positions and disputes rather than adjudicating \
-them, and attribute opinions or claims to whoever made them instead of \
-stating them as settled fact.
+12. Stay neutral. Describe positions and disputes rather than settling them, \
+and attribute claims to whoever made them instead of stating them as fact.
+13. Fill "article_ids" for a story BEFORE writing its detail. List every \
+article that story draws on and no others. Never invent an id, and never \
+cite an article that does not support the claim you used it for.
 
-Example contrasting rule 1's pass and fail case, for a topic with two \
-articles covering the same product launch:
-- WRONG (separate story cards): "Article 1 reports Company X launched \
-Y today... Article 2 reports reviewers had mixed reactions..."
-- RIGHT (one synthesized thread): "Company X launched Y today, and early \
-reviewer reaction has been mixed, with critics pointing to [the specific \
-detail from the second article, folded into the same narrative]."
-"""
+THE DENSITY TO AVOID
 
+This is the single most important thing to get right. Compare:
+
+- WRONG (one 43-word sentence, three ideas stacked up): "The central bank, \
+which had been widely expected to continue its easing cycle following three \
+consecutive cuts, signalled a more cautious stance on Tuesday, sending bond \
+yields higher as investors repriced their expectations for the year."
+- RIGHT (three sentences, one idea each, 14 words on average): "The central \
+bank signalled it will slow down its rate cuts. Investors had expected \
+another cut after three in a row. Bond yields rose as they changed their \
+bets for the rest of the year."
+
+Both say the same thing. The second is the one to write, every time."""
+
+# Kept deliberately shallow. Flash-class models get unreliable on deeply
+# nested schemas (repetitive output, brackets left unclosed at the token
+# limit) and Google's own docs warn that very large or deeply nested schemas
+# may be rejected outright. article_ids is a flat list of integers rather
+# than a list of one-field objects, which removes a nesting level from the
+# old shape even though the output now carries more structure than it did.
+#
+# propertyOrdering makes the model fill fields in a useful order: the cited
+# ids before the prose that leans on them, and the whole story list before
+# the overview that summarizes it. Both are generated in the order listed.
 BRIEF_SCHEMA = {
     "type": "OBJECT",
-    "description": "One synthesized daily briefing for a single topic.",
+    "description": "One day's briefing for a single news topic.",
     "properties": {
-        "sources": {
+        "stories": {
             "type": "ARRAY",
             "description": (
-                "The numbered articles this briefing actually draws on, "
-                "typically 3-8 of them. Chosen before writing the summary, "
-                "per rule 6: list every article_id a claim in the summary "
-                "relies on, and no others."
+                "One entry per distinct development, most significant first. "
+                "Articles covering the same underlying event belong in the "
+                "same entry, per rule 2."
             ),
             "items": {
                 "type": "OBJECT",
                 "properties": {
-                    "article_id": {
-                        "type": "INTEGER",
-                        "description": "The id field of one article from the numbered list you were given.",
+                    "article_ids": {
+                        "type": "ARRAY",
+                        "description": (
+                            "Ids of the numbered articles this story draws on, "
+                            "chosen before the detail is written, per rule 13."
+                        ),
+                        "items": {"type": "INTEGER"},
+                    },
+                    "subheading": {
+                        "type": "STRING",
+                        "description": (
+                            "What happened, stated plainly in under 10 words, "
+                            "per rule 3. Not a category label."
+                        ),
+                    },
+                    "detail": {
+                        "type": "STRING",
+                        "description": (
+                            "2-3 short paragraphs separated by a blank line, "
+                            "per rule 4, following the language rules 5-9."
+                        ),
                     },
                 },
-                "required": ["article_id"],
+                "propertyOrdering": ["article_ids", "subheading", "detail"],
+                "required": ["article_ids", "subheading", "detail"],
             },
         },
-        "headline": {
-            "type": "STRING",
-            "description": "A short, neutral section headline for the whole topic's briefing (well under 12 words).",
-        },
-        "summary": {
+        "overview": {
             "type": "STRING",
             "description": (
-                "The synthesized briefing itself: 3-5 short paragraphs of "
-                "connected prose, separated by a blank line, per rules 2-4. "
-                "Not a bulleted or numbered list."
+                "2-3 sentences on what matters most across this topic today, "
+                "per rule 1. Written after the stories, and standing on its "
+                "own for a reader who stops there."
             ),
         },
     },
-    "propertyOrdering": ["sources", "headline", "summary"],
-    "required": ["sources", "headline", "summary"],
+    "propertyOrdering": ["stories", "overview"],
+    "required": ["stories", "overview"],
 }
 
 
@@ -412,6 +463,10 @@ def _gemini_request(model, prompt):
             "temperature": 0.2,
             "responseMimeType": "application/json",
             "responseSchema": BRIEF_SCHEMA,
+            # Set explicitly so a long topic can't run into a low default and
+            # come back as JSON cut off mid-string, which is how these models
+            # fail on structured output rather than with a clean error.
+            "maxOutputTokens": MAX_OUTPUT_TOKENS,
         },
     }
     return url, headers, body
@@ -444,6 +499,7 @@ def _groq_request(model, prompt):
     body = {
         "model": model,
         "temperature": 0.2,
+        "max_tokens": MAX_OUTPUT_TOKENS,
         "messages": [
             {"role": "system", "content": SYSTEM_INSTRUCTION},
             {"role": "user", "content": prompt},
@@ -593,9 +649,9 @@ def summarize_topic(topic_name, articles, max_developments):
 {json.dumps(numbered, ensure_ascii=False)}
 
 Based only on the numbered articles above, write today's "{topic_name}"
-briefing per your instructions. Cover at most {max_developments} of the
-most significant distinct developments, and cite each source by its
-numeric id.
+briefing per your instructions. Give at most {max_developments} stories,
+most significant first, and cite each one by the numeric ids it draws on.
+Keep the sentences short and plain, per language rules 5-9.
 """
 
     # Walk the chain until a model answers. Each one that doesn't costs a
@@ -656,48 +712,83 @@ numeric id.
         print(f"  [warn] model returned non-object JSON for {topic_name}", file=sys.stderr)
         return None
 
-    # Cited article_ids resolve back to the article we actually fetched.
-    # None of the title, link, or outlet in the email comes from Gemini's
-    # own output, so a mistyped or invented link can't reach the inbox.
-    sources_in = brief.get("sources") or []
-    sources = []
-    seen_ids = set()
-    if isinstance(sources_in, list):
-        for s in sources_in:
-            if not isinstance(s, dict):
-                continue
-            try:
-                article_id = int(s.get("article_id"))
-            except (TypeError, ValueError):
-                continue
-            if article_id in seen_ids:
-                continue
-            article = by_id.get(article_id)
-            if article is None:
-                print(
-                    f"  [warn] Gemini cited unknown article_id {article_id} "
-                    f"for {topic_name}; dropping",
-                    file=sys.stderr,
-                )
-                continue
-            seen_ids.add(article_id)
-            sources.append({
-                "title": article["title"],
-                "link": article["link"],
-                "outlet": article["source"],
-            })
+    stories = []
+    for entry in brief.get("stories") or []:
+        if not isinstance(entry, dict):
+            continue
+        subheading = str(entry.get("subheading") or "").strip()
+        detail = str(entry.get("detail") or "").strip()
+        if not subheading and not detail:
+            continue
+        stories.append({
+            "subheading": subheading,
+            "detail": detail,
+            "sources": _resolve_sources(entry.get("article_ids"), by_id, topic_name),
+        })
 
-    summary = str(brief.get("summary") or "").strip()
-    headline = str(brief.get("headline") or topic_name).strip()
-    if not summary:
-        print(f"  [warn] empty summary for {topic_name}", file=sys.stderr)
+    overview = str(brief.get("overview") or "").strip()
+    if not stories and not overview:
+        print(f"  [warn] empty briefing for {topic_name}", file=sys.stderr)
         return None
 
     return {
-        "headline": headline,
-        "summary": summary,
-        "sources": sources,
+        "overview": overview,
+        "stories": stories,
     }
+
+
+def average_sentence_length(brief):
+    """
+    Mean words per sentence across a briefing's prose. Readability guidance
+    for general-audience news puts the target around 15-20 words, so this
+    is a cheap way to see from the log whether the language rules in the
+    system instruction are actually landing. Returns None with nothing to
+    measure.
+    """
+    prose = [brief.get("overview") or ""]
+    prose += [s.get("detail") or "" for s in brief.get("stories") or []]
+    sentences = [
+        s for s in re.split(r"(?<=[.!?])\s+", " ".join(prose).strip()) if s.strip()
+    ]
+    if not sentences:
+        return None
+    words = sum(len(s.split()) for s in sentences)
+    return words / len(sentences)
+
+
+def _resolve_sources(article_ids, by_id, topic_name):
+    """
+    Turn the ids a story cited into real articles. The model never sees a
+    link, so the title, link, and outlet all come from what we fetched
+    rather than from anything it wrote. An id it invented resolves to
+    nothing and is dropped.
+    """
+    sources = []
+    seen = set()
+    if not isinstance(article_ids, list):
+        return sources
+
+    for raw in article_ids:
+        try:
+            article_id = int(raw)
+        except (TypeError, ValueError):
+            continue
+        if article_id in seen:
+            continue
+        article = by_id.get(article_id)
+        if article is None:
+            print(
+                f"  [warn] cited unknown article_id {article_id} for {topic_name}; dropping",
+                file=sys.stderr,
+            )
+            continue
+        seen.add(article_id)
+        sources.append({
+            "title": article["title"],
+            "link": article["link"],
+            "outlet": article["source"],
+        })
+    return sources
 
 
 def headlines_only_brief(articles, max_developments):
@@ -712,13 +803,16 @@ def headlines_only_brief(articles, max_developments):
     if not picked:
         return None
     return {
-        "headline": None,
-        "summary": None,
+        "overview": None,
         "degraded": True,
-        "sources": [
-            {"title": a["title"], "link": a["link"], "outlet": a["source"]}
-            for a in picked
-        ],
+        "stories": [{
+            "subheading": None,
+            "detail": None,
+            "sources": [
+                {"title": a["title"], "link": a["link"], "outlet": a["source"]}
+                for a in picked
+            ],
+        }],
     }
 
 
@@ -741,32 +835,60 @@ _WARN_BORDER = "#f0dca0"
 _WARN_TEXT = "#8a6100"
 
 
-def _summary_to_html(summary):
-    """Turn paragraph breaks in the briefing into HTML paragraphs."""
-    parts = [p.strip() for p in re.split(r"\n\s*\n", summary) if p.strip()]
-    if not parts:
-        parts = [summary.strip()]
+def _paragraphs_to_html(text, size=15, color=None, margin="0 0 12px 0"):
+    """Turn blank-line paragraph breaks into HTML paragraphs."""
+    color = color or _TEXT_BODY
+    parts = [p.strip() for p in re.split(r"\n\s*\n", text or "") if p.strip()]
     return "".join(
-        f'<p style="font-size:15px;color:{_TEXT_BODY};line-height:1.6;'
-        f'margin:0 0 14px 0;">{html.escape(p)}</p>'
+        f'<p style="font-size:{size}px;color:{color};line-height:1.6;'
+        f'margin:{margin};">{html.escape(p)}</p>'
         for p in parts
+    )
+
+
+def _sources_html(sources, label="Sources"):
+    """The compact link list that sits under a story."""
+    items = ""
+    for s in sources or []:
+        title = html.escape(s.get("title", "(untitled)"))
+        link = html.escape(s.get("link", "#"), quote=True)
+        outlet = html.escape(s.get("outlet", ""))
+        outlet_bit = f' <span style="color:{_TEXT_MUTED};">({outlet})</span>' if outlet else ""
+        items += (
+            f'<li style="margin:0 0 6px 0;">'
+            f'<span style="color:{_ACCENT};">&#8250;</span> '
+            f'<a href="{link}" style="color:{_ACCENT};text-decoration:none;'
+            f'font-weight:500;">{title}</a>{outlet_bit}</li>'
+        )
+    if not items:
+        return ""
+    return (
+        f'<div style="margin-top:12px;">'
+        f'<div style="font-size:10px;font-weight:700;letter-spacing:0.06em;'
+        f'text-transform:uppercase;color:{_TEXT_MUTED};margin-bottom:6px;">{label}</div>'
+        f'<ul style="margin:0;padding:0;list-style:none;font-size:13px;'
+        f'line-height:1.5;">{items}</ul></div>'
     )
 
 
 def _build_preheader(topic_results):
     """
-    Short summary shown as the inbox preview line, built from whatever
-    headlines actually came back this run. Capped well under what any
+    Short summary shown as the inbox preview line, built from the story
+    subheadings that actually came back this run. Capped well under what any
     client displays, so it never gets cut off mid-thought.
     """
-    headlines = [
-        (brief.get("headline") or "").strip()
-        for _, brief, _ in topic_results
-        if brief and (brief.get("headline") or "").strip()
-    ]
-    if not headlines:
+    subheadings = []
+    for _, brief, _ in topic_results:
+        if not brief or brief.get("degraded"):
+            continue
+        for story in brief.get("stories") or []:
+            sub = (story.get("subheading") or "").strip()
+            if sub:
+                subheadings.append(sub)
+                break  # one per topic keeps the line varied
+    if not subheadings:
         return "Your daily digest is ready."
-    text = " • ".join(headlines)
+    text = " • ".join(subheadings)
     if len(text) > 140:
         text = text[:137].rstrip() + "..."
     return text
@@ -784,57 +906,52 @@ def build_html(topic_results, date_str):
         topic_names.append(topic_name)
 
         degraded = bool(brief.get("degraded"))
+
+        # The topic's own summary sits directly under the topic name, before
+        # any story. A reader who stops here should still have the gist, so
+        # it gets a little more weight than the body copy below it.
         if degraded:
-            # No model answered for this topic, so the section carries the
-            # raw headlines instead. Say so plainly rather than letting a
-            # bare link list read like an editorial choice.
-            headline = "Top headlines"
-            summary_html = (
-                f'<p style="font-size:13px;color:{_TEXT_MUTED};line-height:1.6;'
-                f'margin:0 0 14px 0;">No summary was available for this topic '
+            overview_html = (
+                f'<p style="font-size:14px;color:{_TEXT_MUTED};line-height:1.6;'
+                f'margin:0 0 4px 0;">No summary was available for this topic '
                 f'this run, so the latest stories are listed directly.</p>'
             )
         else:
-            headline = html.escape(brief.get("headline") or topic_name)
-            summary_html = _summary_to_html(brief.get("summary") or "")
-
-        sources_html = ""
-        for s in brief.get("sources") or []:
-            title = html.escape(s.get("title", "(untitled)"))
-            link = html.escape(s.get("link", "#"), quote=True)
-            outlet = html.escape(s.get("outlet", ""))
-            outlet_bit = (
-                f' <span style="color:{_TEXT_MUTED};">({outlet})</span>' if outlet else ""
-            )
-            sources_html += (
-                f'<li style="margin:0 0 7px 0;">'
-                f'<span style="color:{_ACCENT};">&#8250;</span> '
-                f'<a href="{link}" style="color:{_ACCENT};text-decoration:none;'
-                f'font-weight:500;">{title}</a>{outlet_bit}</li>'
+            overview_html = _paragraphs_to_html(
+                brief.get("overview") or "", size=16, color=_TEXT_HEADING, margin="0 0 6px 0"
             )
 
-        sources_block = ""
-        if sources_html:
-            list_label = "Stories" if degraded else "Sources"
-            sources_block = f"""
-            <div style="margin-top:16px;">
-              <div style="font-size:11px;font-weight:700;letter-spacing:0.06em;
-                text-transform:uppercase;color:{_TEXT_MUTED};margin-bottom:8px;">{list_label}</div>
-              <ul style="margin:0;padding:0;list-style:none;font-size:13px;
-                line-height:1.5;">{sources_html}</ul>
-            </div>
-            """
+        stories_html = ""
+        for story in brief.get("stories") or []:
+            subheading = (story.get("subheading") or "").strip()
+            detail = (story.get("detail") or "").strip()
+            sources = story.get("sources") or []
 
-        sections.append(f"""
-        <div style="padding:26px 0;border-top:1px solid {_BORDER};">
-          <div style="font-size:11px;font-weight:700;letter-spacing:0.07em;
-            text-transform:uppercase;color:{_ACCENT};margin-bottom:8px;">{html.escape(topic_name)}</div>
-          <div style="font-size:17px;font-weight:700;color:{_TEXT_HEADING};
-            line-height:1.35;margin-bottom:12px;">{headline}</div>
-          {summary_html}
-          {sources_block}
-        </div>
-        """)
+            sub_html = ""
+            if subheading:
+                sub_html = (
+                    f'<div style="font-size:16px;font-weight:700;'
+                    f'color:{_TEXT_HEADING};line-height:1.35;'
+                    f'margin:0 0 8px 0;">{html.escape(subheading)}</div>'
+                )
+
+            stories_html += (
+                f'<div style="margin-top:22px;">'
+                f'{sub_html}'
+                f'{_paragraphs_to_html(detail)}'
+                f'{_sources_html(sources, "Stories" if degraded else "Sources")}'
+                f'</div>'
+            )
+
+        sections.append(
+            f'<div style="padding:26px 0;border-top:1px solid {_BORDER};">'
+            f'<div style="font-size:11px;font-weight:700;letter-spacing:0.07em;'
+            f'text-transform:uppercase;color:{_ACCENT};'
+            f'margin-bottom:10px;">{html.escape(topic_name)}</div>'
+            f'{overview_html}'
+            f'{stories_html}'
+            f'</div>'
+        )
 
     body = "".join(sections) if sections else (
         f'<div style="padding:26px 0;border-top:1px solid {_BORDER};'
@@ -865,7 +982,7 @@ def build_html(topic_results, date_str):
     # inbox preview once the real preheader text runs out.
     preheader_pad = "&#8203;&nbsp;" * 120
 
-    return f"""
+    return _compact_html(f"""
     <html>
     <head>
       <meta charset="utf-8">
@@ -905,7 +1022,45 @@ def build_html(topic_results, date_str):
       </table>
     </body>
     </html>
+    """)
+
+
+# Gmail stops rendering at about 102KB of HTML and hides the rest behind a
+# "View entire message" link. That link still shows everything, so a long
+# digest is never lost, but the reader has to go and get it. Warn a little
+# early instead of at the cliff.
+GMAIL_CLIP_BYTES = 102 * 1024
+GMAIL_WARN_BYTES = 92 * 1024
+
+
+def _compact_html(markup):
     """
+    Squeeze the layout whitespace out of the templates above. HTML collapses
+    runs of whitespace when rendering anyway, so this changes nothing a
+    reader sees, and it buys back a meaningful share of the Gmail budget on
+    a digest with a lot of topics.
+    """
+    # Collapse each run of whitespace to a single space rather than removing
+    # it. Stripping the gap between tags outright would also eat the real
+    # space in constructions like "</a> <span>(Outlet)</span>", which the
+    # reader does see.
+    return re.sub(r"\s+", " ", markup).strip()
+
+
+def check_email_size(html_body):
+    """Log how much of Gmail's clipping budget this digest uses."""
+    size = len(html_body.encode("utf-8"))
+    pct = size / GMAIL_CLIP_BYTES * 100
+    print(f"Email is {size / 1024:.0f}KB ({pct:.0f}% of Gmail's clipping limit)")
+    if size >= GMAIL_WARN_BYTES:
+        print(
+            f"  [warn] approaching Gmail's ~102KB limit. Past it, Gmail shows "
+            f"the first part inline and puts the rest behind a "
+            f"'View entire message' link. Lower max_stories in topics.json, "
+            f"or drop a topic, to keep it inline.",
+            file=sys.stderr,
+        )
+    return size
 
 
 def send_email(subject, html_body):
@@ -993,8 +1148,13 @@ def main():
             print(f"  [error] summarize failed for '{name}': {e}", file=sys.stderr)
             brief = None
         if brief:
-            n_sources = len(brief.get("sources") or [])
-            print(f"  got briefing with {n_sources} cited sources")
+            stories = brief.get("stories") or []
+            n_sources = sum(len(s.get("sources") or []) for s in stories)
+            print(f"  got {len(stories)} stories citing {n_sources} sources")
+            avg = average_sentence_length(brief)
+            if avg is not None:
+                flag = "" if avg <= 22 else "  [warn] denser than intended"
+                print(f"  average sentence length: {avg:.0f} words{flag}")
             topic_results.append((name, brief, None))
         else:
             # Nothing summarized, but the articles are in hand, so send the
@@ -1021,6 +1181,7 @@ def main():
     date_str = now_local.strftime("%A, %d %B %Y")
     html_body = build_html(topic_results, date_str)
     subject = f"{subject_prefix} - {date_str}"
+    check_email_size(html_body)
 
     print("Sending email...")
     try:

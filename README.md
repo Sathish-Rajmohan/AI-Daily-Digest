@@ -21,9 +21,16 @@ GitHub Actions (daily)
 | Groq API | Optional backstop when Gemini is unreachable | Free tier (1,000 requests/day) |
 | Gmail SMTP | Sends the email | Free |
 
-Each topic section is a single narrative, not a stack of near-duplicate story
-cards. Sources used for that brief are listed underneath with links back to
-the publishers.
+Each topic opens with a short overview of what matters that day, then breaks
+into a subheading per development with a few plain-language paragraphs under
+each. Articles covering the same event are fused into one entry rather than
+repeated as near-duplicate cards, and the sources behind each entry are listed
+directly beneath it with links back to the publishers.
+
+The prose is written to general-audience readability targets: sentences
+averaging 15-20 words, active voice, and everyday vocabulary. Each run logs
+the average sentence length it actually got, so you can see whether that is
+holding.
 
 ---
 
@@ -148,8 +155,27 @@ Edit `topics.json`. No code changes needed.
 ```
 
 Add a topic by copying a block. Delete a block to drop one. `max_stories` caps
-how many distinct developments get folded into that topic's single brief (it
-is not "emit N separate summaries"). Push and the next run picks it up.
+how many distinct developments that topic breaks out into its own subheading.
+Articles about the same event still collapse into one entry, so this is a
+ceiling on distinct stories, not a target to pad out to. Push and the next run
+picks it up.
+
+### How long the email can get
+
+Gmail renders about 102KB of HTML and hides the rest behind a "View entire
+message" link, which still shows everything but takes a click. Each run prints
+the size it used. Rough guide:
+
+| Topics | Stories each | Size | |
+|---|---|---|---|
+| 5 | 5 | ~51KB | the stock config, half the budget |
+| 5 | 6 | ~60KB | fine |
+| 8 | 6 | ~94KB | warns in the log |
+| 10 | 8 | ~153KB | Gmail clips it |
+
+So there's room to roughly double the stock config before it matters. Past
+that, drop `max_stories` or split the topics across two runs by adding a
+second workflow with its own `topics.json`.
 
 `settings.lookback_hours` controls how far back feeds are scanned. Default is
 `24` so an 8 AM Sydney run covers the previous day without dragging in a lot of
@@ -191,8 +217,17 @@ for you. Change the hour (or the timezone) there if you want a different slot.
 ## Swapping or adding an LLM
 
 `summarize_topic()` in `digest.py` walks the chain from `build_model_chain()`
-and returns `{headline, summary, sources: [{title, link, outlet}, ...]}` or
-`None`.
+and returns `None` or:
+
+```python
+{
+  "overview": "2-3 sentences on the topic as a whole",
+  "stories": [
+    {"subheading": "...", "detail": "...",
+     "sources": [{"title": "...", "link": "...", "outlet": "..."}]}
+  ],
+}
+```
 
 To add a provider, write a `_yourprovider_request(model, prompt)` returning
 `(url, headers, body)` and a `_yourprovider_extract(data, topic_name)`
