@@ -1,6 +1,6 @@
 # Daily News Digest
 
-GitHub Actions cron job that pulls RSS feeds you configure, asks Gemini to
+GitHub Actions cron job that pulls RSS feeds you configure, asks a model to
 write one synthesized brief per topic (drawing on several outlets so the same
 story isn't repeated), and emails you the HTML digest. No server to babysit.
 
@@ -9,7 +9,7 @@ GitHub Actions (daily)
   → digest.py
       → topics.json
       → RSS feeds
-      → Gemini (one brief per topic, multi-source)
+      → Gemini, or Groq if Gemini is down (one brief per topic)
       → Gmail SMTP
 ```
 
@@ -18,6 +18,7 @@ GitHub Actions (daily)
 | GitHub Actions | Runs the script on a schedule | Free on public repos (private repos use your included Actions minutes) |
 | RSS feeds | Article titles, snippets, and canonical URLs | Free |
 | Gemini API | One multi-source briefing per topic | Free tier (check your project's limits in AI Studio) |
+| Groq API | Optional backstop when Gemini is unreachable | Free tier (1,000 requests/day) |
 | Gmail SMTP | Sends the email | Free |
 
 Each topic section is a single narrative, not a stack of near-duplicate story
@@ -56,6 +57,23 @@ serving capacity, so a model that returns 503 doesn't stop the run. Set
 ID your key can't use is dropped after one try, so an outdated entry in the
 chain costs a fraction of a second rather than breaking the run.
 
+### 2b. Groq API key (optional)
+
+Every model above runs on Google's infrastructure, so an incident on their
+side takes the whole chain with it. Adding Groq puts a non-Google model at the
+bottom of the chain as a backstop. It's free, needs no card, and allows 1,000
+requests a day against the 5 this uses.
+
+1. Open [console.groq.com/keys](https://console.groq.com/keys) and sign in.
+2. Create an API key and copy it.
+3. Add it as the `GROQ_API_KEY` secret in step 4.
+
+Skip this and the digest works exactly as before. The chain leaves Groq out
+when the key isn't set, and only reaches it once every Gemini model has
+already failed, so on a normal day nothing changes. On a day it does get used,
+expect the writing to read noticeably different from Gemini's. Override the
+models with `GROQ_MODELS`.
+
 One digest run is a handful of requests (one per topic). Exact free-tier RPM/RPD
 numbers vary by model and project; check
 [AI Studio rate limits](https://aistudio.google.com/rate-limit) for yours. If a
@@ -88,6 +106,7 @@ In the repo: **Settings → Secrets and variables → Actions → New repository
 | Secret name | Value |
 |---|---|
 | `GEMINI_API_KEY` | Key from step 2 |
+| `GROQ_API_KEY` | Optional. Key from step 2b, used only when Gemini is unreachable |
 | `GMAIL_ADDRESS` | Gmail address that owns the App Password |
 | `GMAIL_APP_PASSWORD` | 16-character App Password from step 3 |
 | `RECIPIENT_EMAIL` | Inbox that should receive the digest (can match `GMAIL_ADDRESS`) |
@@ -169,12 +188,21 @@ GitHub evaluates `timezone` as an IANA zone, so AEST/AEDT shifts are handled
 for you. Change the hour (or the timezone) there if you want a different slot.
 [crontab.guru](https://crontab.guru) is handy for sanity-checking the expression.
 
-## Swapping the LLM
+## Swapping or adding an LLM
 
-All Gemini traffic goes through `summarize_topic_with_gemini()` in `digest.py`.
-Rewrite that function for Claude, OpenAI, Groq, etc., keep the same return
-shape (`{headline, summary, sources: [{title, link, outlet}, ...]}` or `None`),
-and leave the rest alone.
+`summarize_topic()` in `digest.py` walks the chain from `build_model_chain()`
+and returns `{headline, summary, sources: [{title, link, outlet}, ...]}` or
+`None`.
+
+To add a provider, write a `_yourprovider_request(model, prompt)` returning
+`(url, headers, body)` and a `_yourprovider_extract(data, topic_name)`
+returning the model's raw JSON text, register both in `_PROVIDERS`, and add
+its models in `build_model_chain()`. Retries, backoff, the shared time budget,
+and the citation resolution are all provider-agnostic, so there's nothing else
+to touch. Anything speaking the OpenAI chat-completions format can copy the
+Groq pair almost verbatim. `BRIEF_SCHEMA` is written in Gemini's schema
+dialect and converted to plain JSON Schema by `_to_json_schema()`, so only one
+definition needs to stay correct.
 
 ---
 
@@ -192,17 +220,23 @@ confirm 2-Step Verification is on.
 **Gemini 429:** the script backs off and retries. With many topics, raise the
 `time.sleep(2)` between topics in `digest.py`.
 
-**Gemini 403:** account/project issue in AI Studio more often than a code bug.
-Check [aistudio.google.com/app/apikey](https://aistudio.google.com/app/apikey).
+**Gemini 401/403:** account/project issue in AI Studio more often than a code
+bug. Check [aistudio.google.com/app/apikey](https://aistudio.google.com/app/apikey).
+The run drops Gemini at that point and carries on with Groq if you've set a
+key for it, so a dead Google key degrades the digest rather than ending it.
 
 **Gemini 500/502/503/504:** Google's own capacity. A 503 means one model's
 shared serving pool is saturated, which affects free and paid traffic alike,
 so it isn't something a billing or quota change fixes. Asking the same model
 again usually returns the same 503, so the script retries briefly and then
-moves down the model chain instead of waiting longer. Look for
-`answered by fallback model ...` in the Actions log to see this working. If
-no model answers, the topic still appears in the email as a plain list of
-headlines under a "Top headlines" label rather than dropping out of it.
+moves down the chain instead of waiting longer. Look for
+`answered by fallback model ...` in the Actions log to see this working.
+
+**Every model failing at once:** the topic still appears in the email as a
+plain list of headlines under a "Top headlines" label rather than dropping out
+of it. All summarization across the whole run shares one 8-minute budget, so a
+broad outage means a short run that sends headlines, not a run that hits the
+25-minute workflow timeout and sends nothing.
 
 ---
 

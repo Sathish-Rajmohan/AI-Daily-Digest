@@ -15,12 +15,11 @@ jobs:
   send-digest:
     runs-on: ubuntu-latest
     # Upper bound on a run. fetch_feed() in digest.py already bounds a
-    # single unresponsive feed host, and summarize_topic_with_gemini()'s
-    # own retry backoff is bounded too (worst case a bit under 3 minutes
-    # per topic across 5 topics). 25 minutes gives that headroom room to
-    # breathe while still being a backstop against the default 360-minute
-    # job cap, so a stuck run can't quietly eat the whole day and skip
-    # the email.
+    # single unresponsive feed host, and all summarization shares one
+    # wall-clock budget (TOTAL_BUDGET, 8 minutes) that no combination of
+    # retries can exceed. 25 minutes gives that room to breathe while still
+    # being a backstop against the default 360-minute job cap, so a stuck
+    # run can't quietly eat the whole day and skip the email.
     timeout-minutes: 25
     steps:
       - name: Check out repo
@@ -37,6 +36,8 @@ jobs:
       - name: Run digest script
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          # Optional non-Google fallback. The chain skips it when unset.
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
           RECIPIENT_EMAIL: ${{ secrets.RECIPIENT_EMAIL }}

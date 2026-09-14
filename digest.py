@@ -3,7 +3,7 @@
 Daily News Digest
 
 Reads topics.json, pulls recent items from each topic's RSS feeds,
-asks Gemini to write one synthesized brief per topic (using multiple
+asks a model to write one synthesized brief per topic (using multiple
 outlets to fill in the picture), and emails an HTML digest via Gmail SMTP.
 
 Config stored in topics.json and environment variables (see README.md).
@@ -180,18 +180,44 @@ if _pinned_model:
 if not GEMINI_MODELS:
     GEMINI_MODELS = ["gemini-flash-latest"]
 
+# Groq sits at the bottom of the chain as a non-Google fallback. Every Gemini
+# model shares Google's infrastructure, so an incident on their side takes the
+# whole chain above with it. Groq is only reached once all of those have
+# already failed, which keeps the digest's voice consistent on normal days.
+# Leave GROQ_API_KEY unset to skip it entirely.
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
+GROQ_ENDPOINT = "https://api.groq.com/openai/v1/chat/completions"
+GROQ_MODELS = [
+    m.strip()
+    for m in os.environ.get(
+        "GROQ_MODELS", "openai/gpt-oss-120b,llama-3.3-70b-versatile"
+    ).split(",")
+    if m.strip()
+]
+
 # Attempts against a single model before moving down the chain. Three is
 # enough to ride out a brief blip; past that the pool is genuinely saturated
 # and another model is the faster route to an answer.
-GEMINI_ATTEMPTS_PER_MODEL = 3
-GEMINI_BACKOFF_BASE = 4
-GEMINI_REQUEST_TIMEOUT = 90
+ATTEMPTS_PER_MODEL = 3
+BACKOFF_BASE = 4
+REQUEST_TIMEOUT = 90
 
-# Ceiling on the wall-clock time all Gemini work may take in one run. Without
-# it, a broad outage means every topic serially exhausts its own retry budget
-# and the job runs until the workflow timeout kills it mid-flight, sending
-# nothing at all.
-GEMINI_TOTAL_BUDGET = 480
+# Ceiling on the wall-clock time all summarization may take in one run.
+# Without it, a broad outage means every topic serially exhausts its own retry
+# budget and the job runs until the workflow timeout kills it mid-flight,
+# sending nothing at all.
+TOTAL_BUDGET = 480
+
+
+def build_model_chain():
+    """Every (provider, model) pair to try, best first. A provider with no
+    key configured is left out rather than called and rejected."""
+    chain = []
+    if GEMINI_API_KEY:
+        chain += [("gemini", m) for m in GEMINI_MODELS]
+    if GROQ_API_KEY:
+        chain += [("groq", m) for m in GROQ_MODELS]
+    return chain
 
 # Persona and standing rules live in systemInstruction, not the user turn.
 # Gemini processes system instructions before the request content, so they
@@ -284,32 +310,62 @@ BRIEF_SCHEMA = {
 }
 
 
+def _to_json_schema(node):
+    """
+    Translate the schema above into the JSON Schema dialect that
+    OpenAI-compatible endpoints expect, so there's only one schema to keep
+    correct. Types are uppercase in Gemini's dialect and lowercase here,
+    propertyOrdering has no equivalent, and strict mode wants every property
+    listed as required with additionalProperties pinned off.
+    """
+    if not isinstance(node, dict):
+        return node
+
+    out = {}
+    for key, value in node.items():
+        if key == "propertyOrdering":
+            continue
+        if key == "type" and isinstance(value, str):
+            out["type"] = value.lower()
+        elif key == "properties":
+            out["properties"] = {k: _to_json_schema(v) for k, v in value.items()}
+        elif key == "items":
+            out["items"] = _to_json_schema(value)
+        else:
+            out[key] = value
+
+    if out.get("type") == "object":
+        out["additionalProperties"] = False
+        out["required"] = list(out.get("properties", {}).keys())
+    return out
+
+
+BRIEF_SCHEMA_JSON = _to_json_schema(BRIEF_SCHEMA)
+
+
 class _ModelUnusable(Exception):
     """The model name itself is rejected, so no amount of retrying helps."""
 
 
-# Models this run has already seen rejected, and the cutoff for all Gemini
-# work. Both are per-process: one bad model name or one dead key shouldn't
-# be re-probed once per topic.
+# Models rejected by name, providers whose credentials don't work, and the
+# cutoff for all summarization. All three are per-process: one bad model name
+# or one dead key shouldn't be re-probed once per topic. A provider failing
+# auth disables only that provider, so a bad Gemini key still leaves Groq to
+# fall back to.
 _unusable_models = set()
-_gemini_deadline = None
+_disabled_providers = set()
+_deadline = None
 
 
-def start_gemini_budget():
-    global _gemini_deadline
-    _gemini_deadline = time.monotonic() + GEMINI_TOTAL_BUDGET
-
-
-def end_gemini_budget():
-    """Spend the remaining budget immediately, so later topics don't retry."""
-    global _gemini_deadline
-    _gemini_deadline = time.monotonic()
+def start_budget():
+    global _deadline
+    _deadline = time.monotonic() + TOTAL_BUDGET
 
 
 def _budget_left():
-    if _gemini_deadline is None:
+    if _deadline is None:
         return float("inf")
-    return _gemini_deadline - time.monotonic()
+    return _deadline - time.monotonic()
 
 
 def _sleep_within_budget(seconds):
@@ -327,7 +383,7 @@ def _backoff(attempt):
     a fixed schedule means every retry lands on the same congested moment,
     while an offset one has a chance of arriving after capacity frees up.
     """
-    base = GEMINI_BACKOFF_BASE * (2 ** (attempt - 1))
+    base = BACKOFF_BASE * (2 ** (attempt - 1))
     return base * (0.7 + random.random() * 0.6)
 
 
@@ -343,30 +399,115 @@ def _retry_after(resp):
         return None
 
 
-def _call_gemini(model, body):
-    """
-    Run one request body against one model, retrying only what's worth
-    retrying. Returns the parsed response, or None if this model didn't
-    answer in time. Raises _ModelUnusable when the model name is the
-    problem, so the caller drops it instead of trying it again next topic.
-    """
+def _gemini_request(model, prompt):
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
     headers = {
         "Content-Type": "application/json",
         "x-goog-api-key": GEMINI_API_KEY,
     }
+    body = {
+        "systemInstruction": {"parts": [{"text": SYSTEM_INSTRUCTION}]},
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {
+            "temperature": 0.2,
+            "responseMimeType": "application/json",
+            "responseSchema": BRIEF_SCHEMA,
+        },
+    }
+    return url, headers, body
 
-    for attempt in range(1, GEMINI_ATTEMPTS_PER_MODEL + 1):
+
+def _gemini_extract(data, topic_name):
+    """Pull the JSON text out of a Gemini response, or None if it was
+    blocked or came back in a shape we don't recognize."""
+    candidates = data.get("candidates") or []
+    if not candidates:
+        feedback = data.get("promptFeedback") or {}
+        print(
+            f"  [warn] no candidates for {topic_name}; promptFeedback={feedback}",
+            file=sys.stderr,
+        )
+        return None
+    try:
+        parts = candidates[0]["content"]["parts"]
+        return "".join(p.get("text", "") for p in parts).strip()
+    except (KeyError, IndexError, TypeError) as e:
+        print(f"  [warn] unexpected Gemini response shape for {topic_name}: {e}", file=sys.stderr)
+        return None
+
+
+def _groq_request(model, prompt):
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {GROQ_API_KEY}",
+    }
+    body = {
+        "model": model,
+        "temperature": 0.2,
+        "messages": [
+            {"role": "system", "content": SYSTEM_INSTRUCTION},
+            {"role": "user", "content": prompt},
+        ],
+        # strict constrained decoding, so the reply matches BRIEF_SCHEMA the
+        # same way Gemini's responseSchema does.
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "daily_brief",
+                "strict": True,
+                "schema": BRIEF_SCHEMA_JSON,
+            },
+        },
+    }
+    return GROQ_ENDPOINT, headers, body
+
+
+def _groq_extract(data, topic_name):
+    try:
+        return (data["choices"][0]["message"]["content"] or "").strip()
+    except (KeyError, IndexError, TypeError) as e:
+        print(f"  [warn] unexpected Groq response shape for {topic_name}: {e}", file=sys.stderr)
+        return None
+
+
+_PROVIDERS = {
+    "gemini": {
+        "build": _gemini_request,
+        "extract": _gemini_extract,
+        "auth_hint": (
+            "Check that your API key is active in Google AI Studio "
+            "(https://aistudio.google.com/app/apikey) and that the project "
+            "isn't restricted or awaiting verification."
+        ),
+    },
+    "groq": {
+        "build": _groq_request,
+        "extract": _groq_extract,
+        "auth_hint": "Check GROQ_API_KEY at https://console.groq.com/keys.",
+    },
+}
+
+
+def _call_model(provider, model, prompt, topic_name):
+    """
+    Run one prompt against one model, retrying only what's worth retrying.
+    Returns the model's raw JSON text, or None if it didn't answer in time.
+    Raises _ModelUnusable when the model name itself is the problem, so the
+    caller drops it instead of trying it again on the next topic.
+    """
+    spec = _PROVIDERS[provider]
+    url, headers, body = spec["build"](model, prompt)
+    label = f"{provider}/{model}"
+
+    for attempt in range(1, ATTEMPTS_PER_MODEL + 1):
         if _budget_left() <= 0:
             return None
 
         try:
-            resp = requests.post(
-                url, headers=headers, json=body, timeout=GEMINI_REQUEST_TIMEOUT
-            )
+            resp = requests.post(url, headers=headers, json=body, timeout=REQUEST_TIMEOUT)
         except requests.exceptions.RequestException as e:
-            print(f"  [warn] {model}: request failed ({e})", file=sys.stderr)
-            if attempt == GEMINI_ATTEMPTS_PER_MODEL:
+            print(f"  [warn] {label}: request failed ({e})", file=sys.stderr)
+            if attempt == ATTEMPTS_PER_MODEL:
                 return None
             if not _sleep_within_budget(_backoff(attempt)):
                 return None
@@ -375,51 +516,48 @@ def _call_gemini(model, body):
         code = resp.status_code
 
         if code == 200:
-            return resp.json()
+            return spec["extract"](resp.json(), topic_name)
 
         if code in (400, 404):
             # Wrong or retired model ID for this key. Every later call to it
             # would fail the same way.
             raise _ModelUnusable(f"{code}: {resp.text[:200]}")
 
-        if code == 403:
+        if code in (401, 403):
+            # Credentials, not capacity. Disable this provider for the run
+            # and let the chain fall through to the next one.
             print(
-                "  [error] Gemini API returned 403 PERMISSION_DENIED. "
-                "Check that your API key is active in Google AI Studio "
-                "(https://aistudio.google.com/app/apikey) and that the "
-                "project isn't restricted or awaiting verification. "
-                "Skipping the remaining Gemini calls this run.",
+                f"  [error] {label}: {code}, credentials rejected. "
+                f"{spec['auth_hint']} Skipping {provider} for the rest of "
+                "this run.",
                 file=sys.stderr,
             )
-            end_gemini_budget()
+            _disabled_providers.add(provider)
             return None
 
         if code in (429, 500, 502, 503, 504):
-            if attempt == GEMINI_ATTEMPTS_PER_MODEL:
-                print(
-                    f"  [warn] {model}: {code} on the last attempt, moving on",
-                    file=sys.stderr,
-                )
+            if attempt == ATTEMPTS_PER_MODEL:
+                print(f"  [warn] {label}: {code} on the last attempt, moving on", file=sys.stderr)
                 return None
             wait = _retry_after(resp) or _backoff(attempt)
             print(
-                f"  [warn] {model}: {code}, retrying in {wait:.0f}s "
-                f"({attempt}/{GEMINI_ATTEMPTS_PER_MODEL})",
+                f"  [warn] {label}: {code}, retrying in {wait:.0f}s "
+                f"({attempt}/{ATTEMPTS_PER_MODEL})",
                 file=sys.stderr,
             )
             if not _sleep_within_budget(wait):
                 return None
             continue
 
-        print(f"  [warn] {model}: unexpected {code}: {resp.text[:200]}", file=sys.stderr)
+        print(f"  [warn] {label}: unexpected {code}: {resp.text[:200]}", file=sys.stderr)
         return None
 
     return None
 
 
-def summarize_topic_with_gemini(topic_name, articles, max_developments):
+def summarize_topic(topic_name, articles, max_developments):
     """
-    Ask Gemini for ONE briefing per topic.
+    Get ONE briefing per topic from the first model in the chain that answers.
 
     Multiple outlets covering the same development should be fused into that
     single narrative (not listed as separate summaries). Sources are cited
@@ -434,7 +572,7 @@ def summarize_topic_with_gemini(topic_name, articles, max_developments):
     # 1-indexed so article_id in the model's response maps straight back to
     # this dict. The model only ever sees id, title, outlet, and snippet,
     # never the link, so there's nothing for it to mistype or invent. The
-    # real link comes back from `by_id` once Gemini has answered.
+    # real link comes back from `by_id` once the model has answered.
     by_id = {i: a for i, a in enumerate(articles, start=1)}
     numbered = [
         {
@@ -460,67 +598,39 @@ most significant distinct developments, and cite each source by its
 numeric id.
 """
 
-    body = {
-        "systemInstruction": {"parts": [{"text": SYSTEM_INSTRUCTION}]},
-        "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {
-            "temperature": 0.2,
-            "responseMimeType": "application/json",
-            "responseSchema": BRIEF_SCHEMA,
-        },
-    }
-
     # Walk the chain until a model answers. Each one that doesn't costs a
     # few seconds rather than the minutes a same-model retry loop spends
     # waiting on capacity that isn't coming back.
-    data = None
+    chain = build_model_chain()
+    if not chain:
+        print("  [error] no provider configured", file=sys.stderr)
+        return None
+
+    text = None
     answered_by = None
-    for model in GEMINI_MODELS:
-        if model in _unusable_models:
+    for provider, model in chain:
+        if provider in _disabled_providers or (provider, model) in _unusable_models:
             continue
         if _budget_left() <= 0:
-            print(
-                f"  [error] out of Gemini time budget before '{topic_name}'",
-                file=sys.stderr,
-            )
+            print(f"  [error] out of time budget before '{topic_name}'", file=sys.stderr)
             break
         try:
-            data = _call_gemini(model, body)
+            text = _call_model(provider, model, prompt, topic_name)
         except _ModelUnusable as e:
-            print(f"  [warn] dropping model {model} for this run ({e})", file=sys.stderr)
-            _unusable_models.add(model)
+            print(f"  [warn] dropping {provider}/{model} for this run ({e})", file=sys.stderr)
+            _unusable_models.add((provider, model))
             continue
-        if data is not None:
-            answered_by = model
+        if text:
+            answered_by = (provider, model)
             break
-        print(f"  [warn] {model} didn't answer, trying the next model", file=sys.stderr)
+        print(f"  [warn] {provider}/{model} didn't answer, trying the next model", file=sys.stderr)
 
-    if data is None:
-        print(
-            f"  [error] no model answered for topic '{topic_name}'",
-            file=sys.stderr,
-        )
+    if not text:
+        print(f"  [error] no model answered for topic '{topic_name}'", file=sys.stderr)
         return None
 
-    if answered_by != GEMINI_MODELS[0]:
-        print(f"  [info] answered by fallback model {answered_by}")
-
-    # Blocked / empty candidates (safety filters, etc.)
-    candidates = data.get("candidates") or []
-    if not candidates:
-        feedback = data.get("promptFeedback") or {}
-        print(
-            f"  [warn] no candidates for {topic_name}; promptFeedback={feedback}",
-            file=sys.stderr,
-        )
-        return None
-
-    try:
-        parts = candidates[0]["content"]["parts"]
-        text = "".join(p.get("text", "") for p in parts).strip()
-    except (KeyError, IndexError, TypeError) as e:
-        print(f"  [warn] unexpected Gemini response shape for {topic_name}: {e}", file=sys.stderr)
-        return None
+    if answered_by != chain[0]:
+        print(f"  [info] answered by fallback model {answered_by[0]}/{answered_by[1]}")
 
     if text.startswith("```"):
         text = text.strip("`")
@@ -530,7 +640,7 @@ numeric id.
     try:
         brief = json.loads(text)
     except json.JSONDecodeError as e:
-        print(f"  [warn] could not parse Gemini JSON for {topic_name}: {e}", file=sys.stderr)
+        print(f"  [warn] could not parse the model's JSON for {topic_name}: {e}", file=sys.stderr)
         print(f"  raw text: {text[:500]}", file=sys.stderr)
         return None
 
@@ -538,12 +648,12 @@ numeric id.
     # that shape so a list never gets emailed as separate summaries again.
     if isinstance(brief, list):
         print(
-            f"  [warn] Gemini returned a list for {topic_name}; expected one briefing object",
+            f"  [warn] model returned a list for {topic_name}; expected one briefing object",
             file=sys.stderr,
         )
         return None
     if not isinstance(brief, dict):
-        print(f"  [warn] Gemini returned non-object JSON for {topic_name}", file=sys.stderr)
+        print(f"  [warn] model returned non-object JSON for {topic_name}", file=sys.stderr)
         return None
 
     # Cited article_ids resolve back to the article we actually fetched.
@@ -826,9 +936,19 @@ def send_email(subject, html_body):
 
 
 def main():
-    missing = [k for k in ("GEMINI_API_KEY", "GMAIL_ADDRESS", "GMAIL_APP_PASSWORD") if not os.environ.get(k)]
+    missing = [k for k in ("GMAIL_ADDRESS", "GMAIL_APP_PASSWORD") if not os.environ.get(k)]
     if missing:
         print(f"ERROR: missing required env vars: {', '.join(missing)}", file=sys.stderr)
+        sys.exit(1)
+
+    # Either provider alone is enough to write the briefs, so require one
+    # rather than Gemini specifically.
+    if not (GEMINI_API_KEY or GROQ_API_KEY):
+        print(
+            "ERROR: set GEMINI_API_KEY, GROQ_API_KEY, or both. Neither is set, "
+            "so there's nothing to write the briefs with.",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     config = load_config()
@@ -844,7 +964,7 @@ def main():
         local_tz = timezone.utc
 
     topic_results = []
-    start_gemini_budget()
+    start_budget()
     for topic in config["topics"]:
         name = topic.get("name") or "Untitled"
         # How many distinct developments to fold into the single topic brief.
@@ -866,9 +986,9 @@ def main():
             topic_results.append((name, None, None))
             continue
 
-        print(f"  writing one synthesized brief with {GEMINI_MODELS[0]}...")
+        print(f"  writing one synthesized brief with {build_model_chain()[0][1]}...")
         try:
-            brief = summarize_topic_with_gemini(name, articles, max_developments)
+            brief = summarize_topic(name, articles, max_developments)
         except Exception as e:
             print(f"  [error] summarize failed for '{name}': {e}", file=sys.stderr)
             brief = None
