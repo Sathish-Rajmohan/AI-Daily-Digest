@@ -1,0 +1,35 @@
+name: Daily News Digest
+
+on:
+  schedule:
+    # 8:00 AM Australia/Sydney every day. GitHub Actions cron is UTC by
+    # default; the timezone field (IANA) keeps wall-clock 8 AM through both
+    # AEST (UTC+10) and AEDT (UTC+11) without a manual twice-yearly nudge.
+    # Avoid exact top-of-hour load spikes when possible — :00 is fine here
+    # because the workflow is short and low traffic.
+    - cron: "0 8 * * *"
+      timezone: "Australia/Sydney"
+  workflow_dispatch: {}   # manual run from the Actions tab
+
+jobs:
+  send-digest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run digest script
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          RECIPIENT_EMAIL: ${{ secrets.RECIPIENT_EMAIL }}
+        run: python digest.py

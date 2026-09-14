@@ -1,0 +1,88 @@
+{
+  "_comment": "Edit this file to add or remove topics. Each topic needs a name and a list of RSS feed URLs. To remove a topic, delete its whole block. To add one, copy a block and change the name + feeds.",
+
+  "topics": [
+    {
+      "name": "Tech & AI",
+      "max_stories": 6,
+      "feeds": [
+        "https://feeds.arstechnica.com/arstechnica/technology-lab",
+        "https://www.theverge.com/rss/index.xml",
+        "https://www.technologyreview.com/feed/",
+        "https://techcrunch.com/category/artificial-intelligence/feed/",
+        "https://www.wired.com/feed/rss",
+        "https://feeds.bbci.co.uk/news/technology/rss.xml",
+        "https://rss.nytimes.com/services/xml/rss/nyt/Technology.xml",
+        "https://openai.com/news/rss.xml",
+        "https://deepmind.google/blog/rss.xml",
+        "https://huggingface.co/blog/feed.xml",
+        "https://blog.google/rss/",
+        "https://blog.cloudflare.com/rss/"
+      ]
+    },
+    {
+      "name": "International News",
+      "max_stories": 6,
+      "feeds": [
+        "https://feeds.bbci.co.uk/news/world/rss.xml",
+        "https://www.theguardian.com/world/rss",
+        "https://rss.nytimes.com/services/xml/rss/nyt/World.xml",
+        "https://feeds.npr.org/1004/rss.xml",
+        "https://www.aljazeera.com/xml/rss/all.xml",
+        "https://feeds.washingtonpost.com/rss/world",
+        "https://www.latimes.com/world-nation/rss2.0.xml",
+        "https://www.ft.com/world?format=rss",
+        "https://feeds.a.dj.com/rss/RSSWorldNews.xml",
+        "https://www.abc.net.au/news/feed/51120/rss.xml",
+        "https://www.smh.com.au/rss/world.xml",
+        "https://www.scmp.com/rss/91/feed"
+      ]
+    },
+    {
+      "name": "Geopolitics & Security",
+      "max_stories": 5,
+      "feeds": [
+        "https://foreignpolicy.com/feed/",
+        "https://www.foreignaffairs.com/rss.xml",
+        "https://www.economist.com/international/rss.xml",
+        "https://www.defenseone.com/rss/all/",
+        "https://www.lowyinstitute.org/the-interpreter/rss.xml",
+        "https://www.un.org/en/rss.xml"
+      ]
+    },
+    {
+      "name": "Science & Health",
+      "max_stories": 5,
+      "feeds": [
+        "https://feeds.nature.com/nature/rss/current",
+        "https://www.sciencedaily.com/rss/top/science.xml",
+        "https://feeds.bbci.co.uk/news/science_and_environment/rss.xml",
+        "https://www.who.int/rss-feeds/news-english.xml",
+        "https://www.statnews.com/feed/",
+        "https://www.technologyreview.com/feed/"
+      ]
+    },
+    {
+      "name": "Markets & Business",
+      "max_stories": 5,
+      "feeds": [
+        "https://feeds.bbci.co.uk/news/business/rss.xml",
+        "https://www.cnbc.com/id/100727362/device/rss/rss.html",
+        "https://feeds.bloomberg.com/markets/news.rss",
+        "https://www.ft.com/markets?format=rss",
+        "https://www.ft.com/companies?format=rss",
+        "https://rss.nytimes.com/services/xml/rss/nyt/Business.xml",
+        "https://www.economist.com/finance-and-economics/rss.xml",
+        "https://feeds.a.dj.com/rss/WSJcomUSBusiness.xml",
+        "https://stratechery.com/feed/",
+        "https://www.ben-evans.com/benedictevans?format=rss"
+      ]
+    }
+  ],
+
+  "settings": {
+    "lookback_hours": 24,
+    "email_subject_prefix": "Daily Digest",
+    "timezone": "Australia/Sydney"
+  }
+}
