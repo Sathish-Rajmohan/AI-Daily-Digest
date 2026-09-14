@@ -24,6 +24,8 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from zoneinfo import ZoneInfo
 
+from concurrent.futures import ThreadPoolExecutor
+
 import feedparser
 import requests
 from dateutil import parser as dateparser
@@ -37,10 +39,23 @@ CONFIG_PATH = os.environ.get("DIGEST_CONFIG_PATH", "topics.json")
 # and warning lines interleave the way they actually happened.
 sys.stdout.reconfigure(line_buffering=True)
 
-# Cap how many raw articles we ship to the model per topic. Free-tier
-# prompts stay smaller and a runaway feed can't blow up the request.
-MAX_ARTICLES_PER_TOPIC = 40
+# How many articles a topic may carry into the prompt. Set well above what a
+# quiet topic produces, because the cost of trimming is a story the digest
+# never mentions. _interleave_by_feed() below decides which ones survive when
+# a busy topic runs past this.
+MAX_ARTICLES_PER_TOPIC = 100
+
+# Per-article snippet. RSS descriptions lead with the substance, so the tail
+# end is mostly boilerplate, and trimming it buys room for more articles at
+# the same token cost.
+SNIPPET_CHARS = 300
+
 FEED_FETCH_TIMEOUT = 20
+
+# Feeds per topic fetched at once. Held low enough to stay a polite client
+# while keeping a topic's worst case to a couple of timeout rounds rather
+# than one per feed.
+FEED_FETCH_WORKERS = 8
 
 # feedparser's own fetch path (used as a fallback in fetch_feed() below)
 # doesn't take a timeout argument and can hang indefinitely on a bad host.
@@ -103,16 +118,33 @@ def fetch_feed(feed_url):
         return feedparser.parse(feed_url)
 
 
+def _safe_fetch_feed(feed_url):
+    """fetch_feed that reports its own failure instead of raising, so one
+    bad host can't take down the whole parallel batch."""
+    try:
+        return fetch_feed(feed_url)
+    except Exception as e:
+        print(f"  [warn] failed to parse feed {feed_url}: {e}", file=sys.stderr)
+        return None
+
+
 def fetch_topic_articles(topic, lookback_hours):
     cutoff = datetime.now(timezone.utc) - timedelta(hours=lookback_hours)
-    articles = []
+    feed_urls = topic.get("feeds", [])
+    by_feed = []
     seen_links = set()
 
-    for feed_url in topic.get("feeds", []):
-        try:
-            parsed = fetch_feed(feed_url)
-        except Exception as e:
-            print(f"  [warn] failed to parse feed {feed_url}: {e}", file=sys.stderr)
+    # Fetch in parallel, then process in the original feed order. These are
+    # dozens of independent HTTP calls, and done one at a time a topic's
+    # worst case is its feed count times the per-feed timeout, which on a
+    # long list is the whole job's time budget spent before a single word
+    # gets summarized. Only the waiting overlaps: the dedup below still runs
+    # in a fixed order, so the same inputs always give the same digest.
+    with ThreadPoolExecutor(max_workers=FEED_FETCH_WORKERS) as pool:
+        fetched = list(pool.map(_safe_fetch_feed, feed_urls))
+
+    for feed_url, parsed in zip(feed_urls, fetched):
+        if parsed is None:
             continue
 
         if getattr(parsed, "bozo", False) and not parsed.entries:
@@ -120,6 +152,7 @@ def fetch_topic_articles(topic, lookback_hours):
             continue
 
         source_name = parsed.feed.get("title", feed_url)
+        from_this_feed = []
 
         for entry in parsed.entries:
             pub_time = parse_entry_time(entry)
@@ -140,7 +173,7 @@ def fetch_topic_articles(topic, lookback_hours):
                 summary = re.sub(r"<[^>]+>", " ", summary)
                 summary = re.sub(r"\s+", " ", summary).strip()
 
-            articles.append({
+            from_this_feed.append({
                 "title": entry.get("title", "(untitled)"),
                 "link": link,
                 "summary": summary,
@@ -148,9 +181,40 @@ def fetch_topic_articles(topic, lookback_hours):
                 "published": pub_time.isoformat() if pub_time else None,
             })
 
-    # Prefer fresher items when we have to trim.
-    articles.sort(key=lambda a: a["published"] or "", reverse=True)
-    return articles[:MAX_ARTICLES_PER_TOPIC]
+        if from_this_feed:
+            from_this_feed.sort(key=lambda a: a["published"] or "", reverse=True)
+            by_feed.append(from_this_feed)
+
+    return _interleave_by_feed(by_feed, MAX_ARTICLES_PER_TOPIC)
+
+
+def _interleave_by_feed(by_feed, cap):
+    """
+    Take one article from each feed in turn, freshest first within a feed,
+    until the cap is reached.
+
+    Sorting everything by time and cutting at the cap loses whole outlets on
+    a busy topic: one wire publishing every few minutes can fill every slot
+    and push a story the rest of the world led with out of the list
+    entirely. Going round the feeds instead means every outlet is
+    represented before any outlet gets a second turn, which is what actually
+    protects against missing a major story, since a major story is the one
+    thing several outlets all cover.
+    """
+    picked = []
+    round_index = 0
+    while len(picked) < cap:
+        added = False
+        for feed_articles in by_feed:
+            if round_index < len(feed_articles):
+                picked.append(feed_articles[round_index])
+                added = True
+                if len(picked) >= cap:
+                    break
+        if not added:
+            break  # every feed exhausted
+        round_index += 1
+    return picked
 
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
@@ -206,6 +270,13 @@ REQUEST_TIMEOUT = 90
 # of these models spend output tokens on internal reasoning before the JSON,
 # so the ceiling needs to clear both.
 MAX_OUTPUT_TOKENS = 8192
+
+# How many articles each provider is sent. Gemini has room for the full list.
+# Groq's free tier meters tokens per minute rather than per request, and a
+# hundred articles plus the reply would spend most of a minute's allowance on
+# one topic, so the emergency path gets a shorter list. Fewer articles is a
+# smaller picture, which still beats no briefing at all.
+PROVIDER_ARTICLE_CAP = {"gemini": MAX_ARTICLES_PER_TOPIC, "groq": 45}
 
 # Ceiling on the wall-clock time all summarization may take in one run.
 # Without it, a broad outage means every topic serially exhausts its own retry
@@ -615,12 +686,11 @@ def summarize_topic(topic_name, articles, max_developments):
     """
     Get ONE briefing per topic from the first model in the chain that answers.
 
-    Multiple outlets covering the same development should be fused into that
-    single narrative (not listed as separate summaries). Sources are cited
-    by numeric id and resolved back to the real title/link/outlet from
-    `articles` below, so a mistyped or invented URL can never reach the
-    email. Return shape: {headline, summary, sources: [{title, link,
-    outlet}, ...]} or None.
+    Multiple outlets covering the same development are fused into one story
+    rather than repeated. Sources are cited by numeric id and resolved back
+    to the real title/link/outlet from `articles` below, so a mistyped or
+    invented URL can never reach the email. Returns None, or
+    {overview, stories: [{subheading, detail, sources}, ...]}.
     """
     if not articles:
         return None
@@ -630,28 +700,38 @@ def summarize_topic(topic_name, articles, max_developments):
     # never the link, so there's nothing for it to mistype or invent. The
     # real link comes back from `by_id` once the model has answered.
     by_id = {i: a for i, a in enumerate(articles, start=1)}
-    numbered = [
-        {
-            "id": i,
-            "title": a["title"],
-            "outlet": a["source"],
-            "snippet": (a["summary"] or "")[:500],
-        }
-        for i, a in by_id.items()
-    ]
 
-    # The article list comes first, and the instruction comes last with an
-    # anchor phrase pointing back at it. Gemini follows an instruction
-    # placed right after a large data block more reliably than one stated
-    # before it.
-    prompt = f"""Numbered articles for the topic "{topic_name}", most recent first:
+    def build_prompt(cap):
+        # Ids stay stable across providers because a shorter list is just the
+        # front of the same list, so an id cited by any model resolves against
+        # the same by_id map.
+        numbered = [
+            {
+                "id": i,
+                "title": a["title"],
+                "outlet": a["source"],
+                "snippet": (a["summary"] or "")[:SNIPPET_CHARS],
+            }
+            for i, a in list(by_id.items())[:cap]
+        ]
+
+        # The article list comes first, and the instruction comes last with an
+        # anchor phrase pointing back at it. Gemini follows an instruction
+        # placed right after a large data block more reliably than one stated
+        # before it.
+        return f"""Numbered articles for the topic "{topic_name}", drawn from \
+{len({a["source"] for a in list(by_id.values())[:cap]})} outlets and cycled \
+through them so every outlet is represented:
 
 {json.dumps(numbered, ensure_ascii=False)}
 
 Based only on the numbered articles above, write today's "{topic_name}"
 briefing per your instructions. Give at most {max_developments} stories,
 most significant first, and cite each one by the numeric ids it draws on.
-Keep the sentences short and plain, per language rules 5-9.
+Judge significance by what happened, not by where an article sits in the
+list. Several outlets covering the same event is the strongest signal that
+it matters, so lead with those. Keep the sentences short and plain, per
+language rules 5-9.
 """
 
     # Walk the chain until a model answers. Each one that doesn't costs a
@@ -671,6 +751,7 @@ Keep the sentences short and plain, per language rules 5-9.
             print(f"  [error] out of time budget before '{topic_name}'", file=sys.stderr)
             break
         try:
+            prompt = build_prompt(PROVIDER_ARTICLE_CAP.get(provider, MAX_ARTICLES_PER_TOPIC))
             text = _call_model(provider, model, prompt, topic_name)
         except _ModelUnusable as e:
             print(f"  [warn] dropping {provider}/{model} for this run ({e})", file=sys.stderr)

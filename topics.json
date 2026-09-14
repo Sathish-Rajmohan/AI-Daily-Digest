@@ -1,10 +1,10 @@
 {
-  "_comment": "Edit this file to add or remove topics. Each topic needs a name and a list of RSS feed URLs. max_stories caps how many distinct developments get woven into that topic's single daily brief (not separate per-story summaries). To remove a topic, delete its whole block. To add one, copy a block and change the name + feeds.",
+  "_comment": "Edit this file to add or remove topics. Each topic needs a name and a list of RSS feed URLs. max_stories caps how many distinct developments that topic breaks out under its own subheading; articles covering the same event still collapse into one, so it is a ceiling and not a target. Adding feeds is cheap: articles are taken from each feed in turn rather than by time, so a high-volume feed cannot crowd the others out. To remove a topic, delete its whole block. To add one, copy a block and change the name + feeds.",
 
   "topics": [
     {
       "name": "Tech & AI",
-      "max_stories": 6,
+      "max_stories": 8,
       "feeds": [
         "https://feeds.arstechnica.com/arstechnica/technology-lab",
         "https://www.theverge.com/rss/index.xml",
@@ -17,12 +17,18 @@
         "https://deepmind.google/blog/rss.xml",
         "https://huggingface.co/blog/feed.xml",
         "https://blog.google/rss/",
-        "https://blog.cloudflare.com/rss/"
+        "https://blog.cloudflare.com/rss/",
+        "https://www.404media.co/rss/",
+        "https://restofworld.org/feed/latest/",
+        "https://www.theregister.com/headlines.atom",
+        "https://www.theguardian.com/uk/technology/rss",
+        "https://spectrum.ieee.org/feeds/feed.rss",
+        "https://simonwillison.net/atom/everything/"
       ]
     },
     {
       "name": "International News",
-      "max_stories": 6,
+      "max_stories": 9,
       "feeds": [
         "https://feeds.bbci.co.uk/news/world/rss.xml",
         "https://www.theguardian.com/world/rss",
@@ -34,34 +40,56 @@
         "https://www.ft.com/world?format=rss",
         "https://www.abc.net.au/news/feed/51120/rss.xml",
         "https://www.smh.com.au/rss/world.xml",
-        "https://www.scmp.com/rss/91/feed"
+        "https://www.scmp.com/rss/91/feed",
+        "https://rss.dw.com/rdf/rss-en-world",
+        "https://www.france24.com/en/rss",
+        "https://www.cbc.ca/webfeed/rss/rss-world",
+        "https://www.thehindu.com/news/international/feeder/default.rss",
+        "https://www.japantimes.co.jp/feed/",
+        "https://www.straitstimes.com/news/world/rss.xml",
+        "https://allafrica.com/tools/headlines/rdf/latest/headlines.rdf",
+        "https://en.mercopress.com/rss/"
       ]
     },
     {
       "name": "Geopolitics & Security",
-      "max_stories": 5,
+      "max_stories": 7,
       "feeds": [
         "https://foreignpolicy.com/feed/",
         "https://www.foreignaffairs.com/rss.xml",
         "https://www.economist.com/international/rss.xml",
         "https://www.defenseone.com/rss/all/",
-        "https://www.lowyinstitute.org/the-interpreter/rss.xml"
+        "https://www.lowyinstitute.org/the-interpreter/rss.xml",
+        "https://warontherocks.com/feed/",
+        "https://thediplomat.com/feed/",
+        "https://breakingdefense.com/feed/",
+        "https://www.defensenews.com/arc/outboundfeeds/rss/?outputType=xml",
+        "https://www.bellingcat.com/feed/",
+        "https://www.atlanticcouncil.org/feed/"
       ]
     },
     {
       "name": "Science & Health",
-      "max_stories": 5,
+      "max_stories": 7,
       "feeds": [
         "https://feeds.nature.com/nature/rss/current",
         "https://www.sciencedaily.com/rss/top/science.xml",
         "https://feeds.bbci.co.uk/news/science_and_environment/rss.xml",
         "https://www.statnews.com/feed/",
-        "https://www.technologyreview.com/feed/"
+        "https://www.technologyreview.com/feed/",
+        "https://www.science.org/rss/news_current.xml",
+        "https://www.scientificamerican.com/platform/syndication/rss/",
+        "https://www.newscientist.com/feed/home/",
+        "https://www.theguardian.com/science/rss",
+        "https://feeds.npr.org/1128/rss.xml",
+        "https://kffhealthnews.org/feed/",
+        "https://feeds.arstechnica.com/arstechnica/science",
+        "https://www.quantamagazine.org/feed/"
       ]
     },
     {
       "name": "Markets & Business",
-      "max_stories": 5,
+      "max_stories": 8,
       "feeds": [
         "https://feeds.bbci.co.uk/news/business/rss.xml",
         "https://www.cnbc.com/id/100727362/device/rss/rss.html",
@@ -71,7 +99,12 @@
         "https://rss.nytimes.com/services/xml/rss/nyt/Business.xml",
         "https://www.economist.com/finance-and-economics/rss.xml",
         "https://stratechery.com/feed/",
-        "https://www.ben-evans.com/benedictevans?format=rss"
+        "https://www.ben-evans.com/benedictevans?format=rss",
+        "https://feeds.marketwatch.com/marketwatch/topstories/",
+        "https://finance.yahoo.com/news/rssindex",
+        "https://www.theguardian.com/uk/business/rss",
+        "https://www.economist.com/business/rss.xml",
+        "https://www.cnbc.com/id/10001147/device/rss/rss.html"
       ]
     }
   ],

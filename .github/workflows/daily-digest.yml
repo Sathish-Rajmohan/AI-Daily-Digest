@@ -14,12 +14,13 @@ on:
 jobs:
   send-digest:
     runs-on: ubuntu-latest
-    # Upper bound on a run. fetch_feed() in digest.py already bounds a
-    # single unresponsive feed host, and all summarization shares one
-    # wall-clock budget (TOTAL_BUDGET, 8 minutes) that no combination of
-    # retries can exceed. 25 minutes gives that room to breathe while still
-    # being a backstop against the default 360-minute job cap, so a stuck
-    # run can't quietly eat the whole day and skip the email.
+    # Upper bound on a run. Feeds are fetched in parallel with a per-host
+    # timeout, which holds the worst case for all 75 of them to about four
+    # minutes, and all summarization shares one wall-clock budget
+    # (TOTAL_BUDGET, 8 minutes) that no combination of retries can exceed.
+    # 25 minutes gives both room to breathe while still being a backstop
+    # against the default 360-minute job cap, so a stuck run can't quietly
+    # eat the whole day and skip the email.
     timeout-minutes: 25
     steps:
       - name: Check out repo

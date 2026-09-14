@@ -160,22 +160,46 @@ Articles about the same event still collapse into one entry, so this is a
 ceiling on distinct stories, not a target to pad out to. Push and the next run
 picks it up.
 
+### How articles are chosen
+
+A busy topic finds far more articles than fit in one prompt. International
+News pulls over 400 in a normal 24 hours against a cap of 100, so what gets
+dropped matters more than the cap does.
+
+Articles are taken **one from each feed in turn**, freshest first within a
+feed, rather than sorting everything by time and cutting at the cap. Sorting
+by time loses whole outlets: a wire publishing every few minutes fills the
+list, and a story the rest of the world led with falls off the end. Measured
+on the same pool of articles:
+
+| | Outlets represented | Spread |
+|---|---|---|
+| By time, cap 40 | 11 | 9 from one outlet, 1 from the BBC |
+| Round robin, cap 100 | 17 | 5-6 from every outlet |
+
+Since a major story is precisely the one several outlets all cover, spreading
+the list across outlets is what protects against missing one. The prompt tells
+the model this, so it treats repeated coverage as a significance signal rather
+than something to deduplicate away.
+
+Adding feeds is therefore cheap. More feeds means better coverage without one
+of them taking over.
+
 ### How long the email can get
 
 Gmail renders about 102KB of HTML and hides the rest behind a "View entire
 message" link, which still shows everything but takes a click. Each run prints
 the size it used. Rough guide:
 
-| Topics | Stories each | Size | |
+| Config | Stories | Size | |
 |---|---|---|---|
-| 5 | 5 | ~51KB | the stock config, half the budget |
-| 5 | 6 | ~60KB | fine |
-| 8 | 6 | ~94KB | warns in the log |
-| 10 | 8 | ~153KB | Gmail clips it |
+| stock, as shipped | 39 | ~75KB | 73% of the budget |
+| 5 topics x 6 | 30 | ~60KB | fine |
+| 8 topics x 6 | 48 | ~94KB | warns in the log |
+| 10 topics x 8 | 80 | ~153KB | Gmail clips it |
 
-So there's room to roughly double the stock config before it matters. Past
-that, drop `max_stories` or split the topics across two runs by adding a
-second workflow with its own `topics.json`.
+Past the limit, drop `max_stories` or split the topics across two runs by
+adding a second workflow with its own `topics.json`.
 
 `settings.lookback_hours` controls how far back feeds are scanned. Default is
 `24` so an 8 AM Sydney run covers the previous day without dragging in a lot of
@@ -187,16 +211,27 @@ digest feels repetitive.
 Search `"site name" RSS feed`, or try `/rss`, `/feed`, `/rss.xml` on the domain.
 A browser showing XML with `<item>` or `<entry>` tags means you're good.
 
-The stock config covers Tech & AI, International News, Geopolitics & Security,
-Science & Health, and Markets & Business: BBC, Guardian, NYT, FT, NPR,
-Al Jazeera, ABC Australia, SCMP, Foreign Policy, Foreign Affairs, Defense One,
-Nature, Bloomberg, and a few others. Dead or blocked feeds were left out on
-purpose, including the old Reuters and AP public RSS URLs, the WSJ feeds at
-`feeds.a.dj.com` (stopped publishing in early 2025), and the UN and WHO news
-feeds (both effectively abandoned, with no new items in months to years). All
-feed URLs were spot-checked for a live, recently-updated response before
-being added. If one goes stale later, watch for `found 0 raw articles` in
-that topic's Actions log across several days in a row.
+The stock config ships 75 feeds across five topics, picked for range as well
+as reputation, so a story isn't seen through one country's press alone:
+
+| Topic | Feeds | Reach |
+|---|---|---|
+| Tech & AI | 18 | Ars, Verge, Wired, MIT Tech Review, BBC, NYT, Register, Guardian, IEEE Spectrum, 404 Media, Rest of World, plus OpenAI/DeepMind/HuggingFace/Google/Cloudflare source blogs |
+| International News | 19 | BBC, Guardian, NYT, NPR, WaPo, LA Times, FT, Al Jazeera, ABC and SMH (AU), SCMP (HK), DW (DE), France 24 (FR), CBC (CA), The Hindu (IN), Japan Times (JP), Straits Times (SG), AllAfrica, MercoPress (LatAm) |
+| Geopolitics & Security | 11 | Foreign Policy, Foreign Affairs, Economist, Defense One, Defense News, Breaking Defense, War on the Rocks, The Diplomat, Bellingcat, Lowy Institute, Atlantic Council |
+| Science & Health | 13 | Nature, Science, Scientific American, New Scientist, Quanta, ScienceDaily, BBC, Guardian, NPR Health, STAT, KFF Health News, Ars Science, MIT Tech Review |
+| Markets & Business | 14 | Bloomberg, FT (markets + companies), NYT, BBC, CNBC (markets + economy), Economist (finance + business), MarketWatch, Yahoo Finance, Guardian, Stratechery, Benedict Evans |
+
+Every URL was probed for a live response with a recent item before being
+added. Feeds left out on purpose because they are dead or abandoned: the
+Reuters and AP public RSS URLs, the WSJ feeds at `feeds.a.dj.com` (last item
+over 590 days old), UN and WHO news, and the RSS endpoints for CSIS, RUSI,
+Chatham House, ISW, Carnegie, EurekAlert, Anthropic and Meta AI. The
+International Crisis Group feed is alive but publishes roughly weekly, which
+falls outside a 24-hour lookback most days.
+
+If a feed goes stale later, watch for `found 0 raw articles` in that topic's
+Actions log across several days in a row.
 
 ---
 
