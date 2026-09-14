@@ -521,19 +521,19 @@ def _retry_after(resp):
         return None
 
 
-def _gemini_request(model, prompt):
+def _gemini_request(model, prompt, system, schema, temperature):
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
     headers = {
         "Content-Type": "application/json",
         "x-goog-api-key": GEMINI_API_KEY,
     }
     body = {
-        "systemInstruction": {"parts": [{"text": SYSTEM_INSTRUCTION}]},
+        "systemInstruction": {"parts": [{"text": system}]},
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {
-            "temperature": 0.2,
+            "temperature": temperature,
             "responseMimeType": "application/json",
-            "responseSchema": BRIEF_SCHEMA,
+            "responseSchema": schema,
             # Set explicitly so a long topic can't run into a low default and
             # come back as JSON cut off mid-string, which is how these models
             # fail on structured output rather than with a clean error.
@@ -562,17 +562,17 @@ def _gemini_extract(data, topic_name):
         return None
 
 
-def _groq_request(model, prompt):
+def _groq_request(model, prompt, system, schema, temperature):
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {GROQ_API_KEY}",
     }
     body = {
         "model": model,
-        "temperature": 0.2,
+        "temperature": temperature,
         "max_tokens": MAX_OUTPUT_TOKENS,
         "messages": [
-            {"role": "system", "content": SYSTEM_INSTRUCTION},
+            {"role": "system", "content": system},
             {"role": "user", "content": prompt},
         ],
         # strict constrained decoding, so the reply matches BRIEF_SCHEMA the
@@ -580,9 +580,9 @@ def _groq_request(model, prompt):
         "response_format": {
             "type": "json_schema",
             "json_schema": {
-                "name": "daily_brief",
+                "name": "reply",
                 "strict": True,
-                "schema": BRIEF_SCHEMA_JSON,
+                "schema": _to_json_schema(schema),
             },
         },
     }
@@ -615,7 +615,7 @@ _PROVIDERS = {
 }
 
 
-def _call_model(provider, model, prompt, topic_name):
+def _call_model(provider, model, prompt, topic_name, system, schema, temperature):
     """
     Run one prompt against one model, retrying only what's worth retrying.
     Returns the model's raw JSON text, or None if it didn't answer in time.
@@ -623,7 +623,7 @@ def _call_model(provider, model, prompt, topic_name):
     caller drops it instead of trying it again on the next topic.
     """
     spec = _PROVIDERS[provider]
-    url, headers, body = spec["build"](model, prompt)
+    url, headers, body = spec["build"](model, prompt, system, schema, temperature)
     label = f"{provider}/{model}"
 
     for attempt in range(1, ATTEMPTS_PER_MODEL + 1):
@@ -682,6 +682,142 @@ def _call_model(provider, model, prompt, topic_name):
     return None
 
 
+# Rotated by date so the subject changes every day and comes back around
+# only after a fortnight. Left to its own devices a model gravitates to the
+# same handful of physics and biology chestnuts.
+FACT_FIELDS = [
+    "physics", "biology", "economics", "history", "psychology",
+    "mathematics", "engineering", "linguistics", "geology", "medicine",
+    "astronomy", "chemistry", "anthropology", "computer science",
+]
+
+FACT_SYSTEM = """You write one fact a day for a curious, well-read adult who \
+wants to finish it thinking about something they hadn't considered.
+
+1. Pick something specific and concrete. Not a generality, not a definition.
+2. Prefer the solidly established over the surprising but shaky. If a claim \
+is contested, or is one of those things "everyone knows" that turns out to \
+be folklore, leave it alone.
+3. The reader has already seen the usual circuit: honey never spoils, \
+bananas are radioactive, octopuses have three hearts, Napoleon was average \
+height. Skip anything in that family. Go for what an interested amateur \
+would not already have run into.
+4. Write "fact" as 1-2 plain sentences. No "did you know", no exclamation \
+marks, no build-up.
+5. Write "why" as 2-3 sentences on what the fact explains, what it connects \
+to, or what it should make the reader reconsider. This is the part that \
+earns the fact its place, so do not just restate the fact in other words.
+6. Same language rules as any good explainer: sentences averaging 15-20 \
+words, active voice, everyday vocabulary, and any technical term explained \
+in plain words the first time it appears."""
+
+FACT_SCHEMA = {
+    "type": "OBJECT",
+    "description": "One fact worth knowing, and why it is worth knowing.",
+    "properties": {
+        "fact": {
+            "type": "STRING",
+            "description": "The fact itself, in 1-2 plain sentences, per rule 4.",
+        },
+        "why": {
+            "type": "STRING",
+            "description": (
+                "2-3 sentences on what it explains, connects to, or overturns, "
+                "per rule 5. Not a restatement of the fact."
+            ),
+        },
+    },
+    "propertyOrdering": ["fact", "why"],
+    "required": ["fact", "why"],
+}
+
+
+def fetch_fact_of_the_day(today):
+    """
+    One thing worth knowing, from the same model chain as the briefings.
+
+    Unlike everything else in the digest this isn't grounded in a fetched
+    article, so it carries no sources and is the model's own knowledge.
+    Runs after the topics so news always gets first call on the time budget,
+    and returns None rather than holding up the email if nothing answers.
+    """
+    field = FACT_FIELDS[today.toordinal() % len(FACT_FIELDS)]
+    print(f"Fetching the fact of the day ({field})...")
+
+    def build_prompt(_cap):
+        return (
+            f"Today is {today.strftime('%d %B %Y')}. Give one fact from "
+            f"{field}, chosen per your instructions."
+        )
+
+    # Warmer than the briefings. At news temperature the same few answers
+    # come back for a given field no matter what day it is.
+    fact = run_chain(build_prompt, FACT_SYSTEM, FACT_SCHEMA, 0.95, "fact of the day")
+    if not isinstance(fact, dict):
+        return None
+
+    text = str(fact.get("fact") or "").strip()
+    why = str(fact.get("why") or "").strip()
+    if not text:
+        return None
+    return {"field": field, "fact": text, "why": why}
+
+
+def run_chain(build_prompt, system, schema, temperature, label):
+    """
+    Walk the provider chain until a model answers, then parse its JSON.
+
+    Each model that doesn't answer costs a few seconds rather than the
+    minutes a same-model retry loop spends waiting on capacity that isn't
+    coming back. `build_prompt` takes the article cap for the provider being
+    tried, so a provider on a tighter token budget gets a shorter list.
+    Returns the decoded object, or None.
+    """
+    chain = build_model_chain()
+    if not chain:
+        print("  [error] no provider configured", file=sys.stderr)
+        return None
+
+    text = None
+    answered_by = None
+    for provider, model in chain:
+        if provider in _disabled_providers or (provider, model) in _unusable_models:
+            continue
+        if _budget_left() <= 0:
+            print(f"  [error] out of time budget before '{label}'", file=sys.stderr)
+            break
+        try:
+            prompt = build_prompt(PROVIDER_ARTICLE_CAP.get(provider, MAX_ARTICLES_PER_TOPIC))
+            text = _call_model(provider, model, prompt, label, system, schema, temperature)
+        except _ModelUnusable as e:
+            print(f"  [warn] dropping {provider}/{model} for this run ({e})", file=sys.stderr)
+            _unusable_models.add((provider, model))
+            continue
+        if text:
+            answered_by = (provider, model)
+            break
+        print(f"  [warn] {provider}/{model} didn't answer, trying the next model", file=sys.stderr)
+
+    if not text:
+        print(f"  [error] no model answered for '{label}'", file=sys.stderr)
+        return None
+
+    if answered_by != chain[0]:
+        print(f"  [info] answered by fallback model {answered_by[0]}/{answered_by[1]}")
+
+    if text.startswith("```"):
+        text = text.strip("`")
+        if text.lower().startswith("json"):
+            text = text[4:].lstrip()
+
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as e:
+        print(f"  [warn] could not parse the model's JSON for {label}: {e}", file=sys.stderr)
+        print(f"  raw text: {text[:500]}", file=sys.stderr)
+        return None
+
+
 def summarize_topic(topic_name, articles, max_developments):
     """
     Get ONE briefing per topic from the first model in the chain that answers.
@@ -734,51 +870,8 @@ it matters, so lead with those. Keep the sentences short and plain, per
 language rules 5-9.
 """
 
-    # Walk the chain until a model answers. Each one that doesn't costs a
-    # few seconds rather than the minutes a same-model retry loop spends
-    # waiting on capacity that isn't coming back.
-    chain = build_model_chain()
-    if not chain:
-        print("  [error] no provider configured", file=sys.stderr)
-        return None
-
-    text = None
-    answered_by = None
-    for provider, model in chain:
-        if provider in _disabled_providers or (provider, model) in _unusable_models:
-            continue
-        if _budget_left() <= 0:
-            print(f"  [error] out of time budget before '{topic_name}'", file=sys.stderr)
-            break
-        try:
-            prompt = build_prompt(PROVIDER_ARTICLE_CAP.get(provider, MAX_ARTICLES_PER_TOPIC))
-            text = _call_model(provider, model, prompt, topic_name)
-        except _ModelUnusable as e:
-            print(f"  [warn] dropping {provider}/{model} for this run ({e})", file=sys.stderr)
-            _unusable_models.add((provider, model))
-            continue
-        if text:
-            answered_by = (provider, model)
-            break
-        print(f"  [warn] {provider}/{model} didn't answer, trying the next model", file=sys.stderr)
-
-    if not text:
-        print(f"  [error] no model answered for topic '{topic_name}'", file=sys.stderr)
-        return None
-
-    if answered_by != chain[0]:
-        print(f"  [info] answered by fallback model {answered_by[0]}/{answered_by[1]}")
-
-    if text.startswith("```"):
-        text = text.strip("`")
-        if text.lower().startswith("json"):
-            text = text[4:].lstrip()
-
-    try:
-        brief = json.loads(text)
-    except json.JSONDecodeError as e:
-        print(f"  [warn] could not parse the model's JSON for {topic_name}: {e}", file=sys.stderr)
-        print(f"  raw text: {text[:500]}", file=sys.stderr)
+    brief = run_chain(build_prompt, SYSTEM_INSTRUCTION, BRIEF_SCHEMA, 0.2, topic_name)
+    if brief is None:
         return None
 
     # An earlier version of the prompt returned a list of stories. Refuse
@@ -914,6 +1007,8 @@ _BORDER = "#e6e9ee"
 _WARN_BG = "#fff8e6"
 _WARN_BORDER = "#f0dca0"
 _WARN_TEXT = "#8a6100"
+_FACT_BG = "#f5f7fc"
+_FACT_BORDER = "#dde4f2"
 
 
 def _paragraphs_to_html(text, size=15, color=None, margin="0 0 12px 0"):
@@ -975,7 +1070,33 @@ def _build_preheader(topic_results):
     return text
 
 
-def build_html(topic_results, date_str):
+def _fact_block(fact):
+    """
+    The one-a-day fact, boxed at the top of the email.
+
+    Sits above the news on purpose. It's the part worth reading slowly, and
+    it gets skipped if it's buried under five topics.
+    """
+    if not fact:
+        return ""
+    why = (
+        f'<p style="font-size:14px;color:{_TEXT_BODY};line-height:1.6;'
+        f'margin:8px 0 0 0;">{html.escape(fact["why"])}</p>'
+        if fact.get("why") else ""
+    )
+    return (
+        f'<div style="margin-top:20px;padding:16px 18px;background:{_FACT_BG};'
+        f'border:1px solid {_FACT_BORDER};border-radius:8px;">'
+        f'<div style="font-size:10px;font-weight:700;letter-spacing:0.07em;'
+        f'text-transform:uppercase;color:{_ACCENT};margin-bottom:8px;">'
+        f'One thing worth knowing &middot; {html.escape(fact["field"])}</div>'
+        f'<p style="font-size:15px;font-weight:600;color:{_TEXT_HEADING};'
+        f'line-height:1.55;margin:0;">{html.escape(fact["fact"])}</p>'
+        f'{why}</div>'
+    )
+
+
+def build_html(topic_results, date_str, fact=None):
     sections = []
     failed_topics = []
     topic_names = []
@@ -1089,6 +1210,7 @@ def build_html(topic_results, date_str):
                     letter-spacing:-0.01em;">Your Daily Digest</div>
                   <div style="font-size:13px;color:{_TEXT_MUTED};margin-top:4px;">{html.escape(date_str)}</div>
                   {contents_line}
+                  {_fact_block(fact)}
                   {failure_notice}
                   {body}
                   <div style="padding-top:22px;border-top:1px solid {_BORDER};
@@ -1259,8 +1381,20 @@ def main():
         )
 
     now_local = datetime.now(local_tz)
+
+    # After the topics, so a bad day for the API costs the fact rather than
+    # a topic. A failure here just leaves the block out of the email.
+    fact = None
+    if settings.get("fact_of_the_day", True):
+        try:
+            fact = fetch_fact_of_the_day(now_local.date())
+        except Exception as e:
+            print(f"  [warn] fact of the day failed: {e}", file=sys.stderr)
+        if fact:
+            print(f"  got a fact from {fact['field']}")
+
     date_str = now_local.strftime("%A, %d %B %Y")
-    html_body = build_html(topic_results, date_str)
+    html_body = build_html(topic_results, date_str, fact)
     subject = f"{subject_prefix} - {date_str}"
     check_email_size(html_body)
 

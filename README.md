@@ -32,6 +32,28 @@ averaging 15-20 words, active voice, and everyday vocabulary. Each run logs
 the average sentence length it actually got, so you can see whether that is
 holding.
 
+### One thing worth knowing
+
+Above the news, each email opens with a single fact and a short note on why
+it's worth knowing: what it explains, what it connects to, or what it should
+make you reconsider. It's there to give you one thing to think about on days
+when the news gives you nothing.
+
+The subject rotates by date through fourteen fields (physics, economics,
+history, linguistics, geology, and so on) and comes back around after a
+fortnight, because a model left to choose freely returns to the same handful
+of chestnuts. The prompt also rules out the well-worn circuit of facts that
+turn up on every list.
+
+One caveat worth being clear about: this is the only part of the email not
+grounded in a fetched article. It carries no sources, because it comes from
+the model's own knowledge rather than from today's feeds. Treat it as a
+prompt to go and read about something, not as a citation.
+
+Turn it off by setting `fact_of_the_day` to `false` in `settings`. It runs
+after the topics, so on a bad day for the API you lose the fact rather than
+a topic.
+
 ---
 
 ## Quickstart
@@ -232,6 +254,365 @@ falls outside a 24-hour lookback most days.
 
 If a feed goes stale later, watch for `found 0 raw articles` in that topic's
 Actions log across several days in a row.
+
+---
+
+## Ready-made topics
+
+Finding feeds is the tedious part of setting this up, and plenty of the
+obvious URLs are dead. Every feed below was fetched and checked for a recent
+item, so these are drop-in: copy a block into the `topics` array in
+`topics.json` and push.
+
+Dead as of the last check, so don't bother re-adding them: AP, Reuters (all
+sections), Politico, Axios, FiveThirtyEight, a16z, VentureBeat, PitchBook,
+Bleacher Report, The Athletic, Sports Illustrated, Fox Sports, IMF, VoxEU,
+Brookings, World Bank, OECD, BIS, NYBooks, New Yorker section feeds, AFR,
+Sky & Telescope, PortSwigger, AIGA Eye on Design, Autoblog, Vox, City
+Journal.
+
+<details>
+<summary><b>Sports</b></summary>
+
+```json
+{
+  "name": "Sports",
+  "max_stories": 7,
+  "feeds": [
+    "https://www.espn.com/espn/rss/news",
+    "https://feeds.bbci.co.uk/sport/rss.xml",
+    "https://www.theguardian.com/sport/rss",
+    "https://www.skysports.com/rss/12040",
+    "https://www.cbssports.com/rss/headlines/",
+    "https://sports.yahoo.com/rss/",
+    "https://www.abc.net.au/news/feed/45910/rss.xml"
+  ]
+}
+```
+</details>
+
+<details>
+<summary><b>Finance & Economics</b></summary>
+
+```json
+{
+  "name": "Finance & Economics",
+  "max_stories": 7,
+  "feeds": [
+    "https://www.economist.com/finance-and-economics/rss.xml",
+    "https://feeds.content.dowjones.io/public/rss/mw_topstories",
+    "https://www.investing.com/rss/news.rss",
+    "https://seekingalpha.com/feed.xml",
+    "https://www.federalreserve.gov/feeds/press_all.xml",
+    "https://theconversation.com/au/business/articles.atom"
+  ]
+}
+```
+</details>
+
+<details>
+<summary><b>Climate & Energy</b></summary>
+
+```json
+{
+  "name": "Climate & Energy",
+  "max_stories": 7,
+  "feeds": [
+    "https://www.carbonbrief.org/feed/",
+    "https://insideclimatenews.org/feed/",
+    "https://www.theguardian.com/environment/climate-crisis/rss",
+    "https://grist.org/feed/",
+    "https://www.eia.gov/rss/todayinenergy.xml",
+    "https://cleantechnica.com/feed/",
+    "https://www.nature.com/nclimate.rss",
+    "https://yaleclimateconnections.org/feed/"
+  ]
+}
+```
+</details>
+
+<details>
+<summary><b>Space & Astronomy</b></summary>
+
+```json
+{
+  "name": "Space & Astronomy",
+  "max_stories": 6,
+  "feeds": [
+    "https://www.nasa.gov/rss/dyn/breaking_news.rss",
+    "https://spacenews.com/feed/",
+    "https://www.space.com/feeds/all",
+    "https://arstechnica.com/science/space/feed/",
+    "https://www.esa.int/rssfeed/Our_Activities/Space_News",
+    "https://phys.org/rss-feed/space-news/"
+  ]
+}
+```
+</details>
+
+<details>
+<summary><b>Cybersecurity</b></summary>
+
+```json
+{
+  "name": "Cybersecurity",
+  "max_stories": 7,
+  "feeds": [
+    "https://krebsonsecurity.com/feed/",
+    "https://www.bleepingcomputer.com/feed/",
+    "https://feeds.feedburner.com/TheHackersNews",
+    "https://www.schneier.com/feed/atom/",
+    "https://www.darkreading.com/rss.xml",
+    "https://therecord.media/feed/",
+    "https://www.cisa.gov/cybersecurity-advisories/all.xml"
+  ]
+}
+```
+</details>
+
+<details>
+<summary><b>Startups & Venture</b></summary>
+
+```json
+{
+  "name": "Startups & Venture",
+  "max_stories": 6,
+  "feeds": [
+    "https://techcrunch.com/feed/",
+    "https://news.crunchbase.com/feed/",
+    "https://sifted.eu/feed",
+    "https://tech.eu/feed/",
+    "https://www.eu-startups.com/feed/",
+    "https://www.saastr.com/feed/"
+  ]
+}
+```
+</details>
+
+<details>
+<summary><b>US Politics</b></summary>
+
+Deliberately spans the spectrum, since a digest built from one side of it
+will read as confirmation rather than information. Drop whichever you don't
+want.
+
+```json
+{
+  "name": "US Politics",
+  "max_stories": 8,
+  "feeds": [
+    "https://rss.nytimes.com/services/xml/rss/nyt/Politics.xml",
+    "https://feeds.washingtonpost.com/rss/politics",
+    "https://feeds.npr.org/1014/rss.xml",
+    "https://thehill.com/news/feed/",
+    "https://www.realclearpolitics.com/index.xml",
+    "https://www.propublica.org/feeds/propublica/main",
+    "https://www.nationalreview.com/feed/",
+    "https://reason.com/feed/",
+    "https://thedispatch.com/feed/",
+    "https://www.motherjones.com/politics/feed/"
+  ]
+}
+```
+</details>
+
+<details>
+<summary><b>Gaming</b></summary>
+
+```json
+{
+  "name": "Gaming",
+  "max_stories": 7,
+  "feeds": [
+    "https://www.eurogamer.net/feed",
+    "https://www.polygon.com/rss/index.xml",
+    "https://www.rockpapershotgun.com/feed",
+    "https://kotaku.com/rss",
+    "https://www.gamedeveloper.com/rss.xml",
+    "https://www.ign.com/rss/articles/feed",
+    "https://www.pcgamer.com/rss/"
+  ]
+}
+```
+</details>
+
+<details>
+<summary><b>Film & TV</b></summary>
+
+```json
+{
+  "name": "Film & TV",
+  "max_stories": 6,
+  "feeds": [
+    "https://variety.com/feed/",
+    "https://www.hollywoodreporter.com/feed/",
+    "https://deadline.com/feed/",
+    "https://www.indiewire.com/feed/",
+    "https://www.theguardian.com/film/rss",
+    "https://www.rogerebert.com/feed"
+  ]
+}
+```
+</details>
+
+<details>
+<summary><b>Music</b></summary>
+
+```json
+{
+  "name": "Music",
+  "max_stories": 6,
+  "feeds": [
+    "https://pitchfork.com/feed/feed-news/rss",
+    "https://www.rollingstone.com/music/feed/",
+    "https://www.theguardian.com/music/rss",
+    "https://www.billboard.com/feed/",
+    "https://consequence.net/feed/",
+    "https://thequietus.com/feed"
+  ]
+}
+```
+</details>
+
+<details>
+<summary><b>Books & Ideas</b></summary>
+
+```json
+{
+  "name": "Books & Ideas",
+  "max_stories": 6,
+  "feeds": [
+    "https://lithub.com/feed/",
+    "https://aeon.co/feed.rss",
+    "https://www.theguardian.com/books/rss",
+    "https://feeds.npr.org/1032/rss.xml",
+    "https://electricliterature.com/feed/",
+    "https://www.theparisreview.org/blog/feed/",
+    "https://fivebooks.com/feed/",
+    "https://newrepublic.com/rss.xml"
+  ]
+}
+```
+</details>
+
+<details>
+<summary><b>Crypto & Web3</b></summary>
+
+```json
+{
+  "name": "Crypto & Web3",
+  "max_stories": 6,
+  "feeds": [
+    "https://www.coindesk.com/arc/outboundfeeds/rss/",
+    "https://cointelegraph.com/rss",
+    "https://decrypt.co/feed",
+    "https://www.theblock.co/rss.xml"
+  ]
+}
+```
+</details>
+
+<details>
+<summary><b>Design & Architecture</b></summary>
+
+```json
+{
+  "name": "Design & Architecture",
+  "max_stories": 5,
+  "feeds": [
+    "https://www.dezeen.com/feed/",
+    "https://www.archdaily.com/rss/",
+    "https://www.core77.com/blog/rss.xml",
+    "https://www.designboom.com/feed/"
+  ]
+}
+```
+</details>
+
+<details>
+<summary><b>Cars & EVs</b></summary>
+
+```json
+{
+  "name": "Cars & EVs",
+  "max_stories": 6,
+  "feeds": [
+    "https://electrek.co/feed/",
+    "https://insideevs.com/rss/articles/all/",
+    "https://www.caranddriver.com/rss/all.xml/",
+    "https://jalopnik.com/rss"
+  ]
+}
+```
+</details>
+
+<details>
+<summary><b>Australia</b></summary>
+
+```json
+{
+  "name": "Australia",
+  "max_stories": 7,
+  "feeds": [
+    "https://www.abc.net.au/news/feed/51120/rss.xml",
+    "https://www.theguardian.com/australia-news/rss",
+    "https://www.smh.com.au/rss/national.xml",
+    "https://theconversation.com/au/articles.atom",
+    "https://www.crikey.com.au/feed/"
+  ]
+}
+```
+</details>
+
+---
+
+## Finding feeds for a topic that isn't listed
+
+Paste this into any chat assistant with web search, swapping in your topic.
+It's written to make the assistant check the URLs rather than recall them,
+which is where this usually goes wrong: plenty of plausible-looking feed
+URLs stopped working years ago and a model will happily produce them from
+memory.
+
+```
+I need RSS/Atom feed URLs for a daily news digest on: <YOUR TOPIC>.
+
+Find 6-10 feeds and return them as a JSON array of URL strings, nothing else.
+
+Requirements:
+1. Verify each URL actually resolves right now and returns RSS or Atom XML.
+   Do not give me a URL you have not checked. If you cannot check it, leave
+   it out. Guessing /feed or /rss on a domain is not checking.
+2. Each feed must have published something in the last 7 days. Say which
+   ones you could not confirm.
+3. Full-site or section feeds only. No search-query feeds, no per-author or
+   per-tag feeds, no Google News or other aggregator-generated feeds, no
+   Reddit, no YouTube.
+4. The feed must carry a headline and a text summary or description per
+   item. Title-only feeds are no use to me.
+5. Prefer publications with an editorial masthead. Avoid content farms, SEO
+   blogs and press-release wires.
+6. Spread them across outlets, countries and, where the topic is contested,
+   editorial perspective. I want a full picture, not one house view.
+7. No feed behind a login or a hard paywall that strips the summary text.
+
+For each one, tell me in a sentence: the outlet, roughly how often it
+publishes, and its angle or specialism.
+```
+
+Then check what comes back before trusting it. Add the feeds, run the
+workflow by hand, and look for `found 0 raw articles` or a topic with far
+fewer outlets than feeds in the log.
+
+Two things to know when adding your own:
+
+- **Feeds with no dates on their items** are always treated as current,
+  since there's no timestamp to compare against the lookback window. A feed
+  like that can put the same items in your digest every day. Watch for
+  repeats and drop it if it happens.
+- **Adding feeds is cheap.** Articles are taken from each feed in turn, so a
+  new feed takes a share of the slots rather than a high-volume one taking
+  over.
 
 ---
 
