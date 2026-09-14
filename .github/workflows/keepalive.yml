@@ -25,5 +25,10 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          # Re-sync immediately before committing. The checkout above is a
+          # snapshot from the start of the job, and main can move between
+          # then and the push below, which turns this into a rejected,
+          # non-fast-forward push instead of the no-op it should be.
+          git pull --ff-only
           git commit --allow-empty -m "chore: keepalive (prevent 60-day schedule idle)"
           git push
