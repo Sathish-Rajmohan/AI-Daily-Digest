@@ -31,8 +31,8 @@ the publishers.
 ### 1. Fork or clone
 
 ```bash
-git clone https://github.com/Sathish-Rajmohan/AI-Daily-News-Digest.git
-cd AI-Daily-News-Digest
+git clone https://github.com/Sathish-Rajmohan/AI-Daily-Digest.git
+cd AI-Daily-Digest
 ```
 
 Or fork on GitHub and work from your copy. Public or private both work; public
