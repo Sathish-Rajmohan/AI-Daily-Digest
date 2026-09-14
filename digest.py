@@ -6,7 +6,7 @@ Reads topics.json, pulls recent items from each topic's RSS feeds,
 asks Gemini to write one synthesized brief per topic (using multiple
 outlets to fill in the picture), and emails an HTML digest via Gmail SMTP.
 
-Config lives in topics.json and environment variables (see README.md).
+Config stored in topics.json and environment variables (see README.md).
 """
 
 import html
@@ -151,25 +151,94 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-flash-latest")
 GEMINI_MAX_RETRIES = 3
 
+# Persona + standing rules live in systemInstruction rather than the user
+# turn: Gemini processes it before the request content and it doesn't have
+# to compete with the (potentially large) article list for attention. Rules
+# are stated as literal, numbered constraints rather than vague guidance
+# ("at most N developments", not "keep it short") since Gemini follows
+# concrete constraints far more reliably than soft ones.
+SYSTEM_INSTRUCTION = """You are a careful, neutral news editor producing one \
+synthesized briefing per topic for a personal daily digest. Each request \
+gives you a numbered list of recent articles, possibly from several \
+outlets, about one topic.
+
+Rules, always in force:
+
+1. Output exactly one briefing per the response schema. Never structure it \
+as a list of separate per-story summaries - that is the single failure \
+mode to avoid above everything else below.
+2. Treat two articles as covering "the same development" when they \
+describe the same underlying real-world event, decision, or announcement, \
+even if worded differently or from different outlets. Fuse same-development \
+articles into one thread and combine their detail into a fuller account \
+(who, what, where, why it matters, what happens next) instead of repeating \
+the same lead more than once.
+3. Write the summary as 3-5 short paragraphs of connected prose covering \
+the most significant distinct developments. Do not format it as a bulleted \
+or numbered list, and do not label or number individual stories within it.
+4. Use only the numbered articles given to you in this request. Do not draw \
+on outside or prior knowledge of the topic, even if you believe it to be \
+true or think it would round out the picture - if the given articles don't \
+say it, it does not go in the briefing.
+5. If articles disagree on a specific detail (a figure, a cause, an \
+attribution), say so briefly rather than silently picking one version.
+6. Every entry in "sources" must be the integer id of an article from the \
+numbered list that you actually drew a claim from. Never invent an id, and \
+never cite an id for a claim that specific article doesn't support. Choose \
+your sources deliberately, typically 3-8 of them, before writing the prose \
+in "summary" - do not write the narrative first and then guess citations \
+for it afterward.
+7. Stay neutral: describe positions and disputes rather than adjudicating \
+them, and attribute opinions or claims to whoever made them instead of \
+stating them as settled fact.
+
+Example contrasting rule 1's pass and fail case, for a topic with two \
+articles covering the same product launch:
+- WRONG (separate story cards): "Article 1 reports Company X launched \
+Y today... Article 2 reports reviewers had mixed reactions..."
+- RIGHT (one synthesized thread): "Company X launched Y today, and early \
+reviewer reaction has been mixed, with critics pointing to [the specific \
+detail from the second article, folded into the same narrative]."
+"""
+
 BRIEF_SCHEMA = {
     "type": "OBJECT",
+    "description": "One synthesized daily briefing for a single topic.",
     "properties": {
-        "headline": {"type": "STRING"},
-        "summary": {"type": "STRING"},
         "sources": {
             "type": "ARRAY",
+            "description": (
+                "The numbered articles this briefing actually draws on, "
+                "typically 3-8 of them. Chosen before writing the summary, "
+                "per rule 6: list every article_id a claim in the summary "
+                "relies on, and no others."
+            ),
             "items": {
                 "type": "OBJECT",
                 "properties": {
-                    "title": {"type": "STRING"},
-                    "link": {"type": "STRING"},
-                    "outlet": {"type": "STRING"},
+                    "article_id": {
+                        "type": "INTEGER",
+                        "description": "The id field of one article from the numbered list you were given.",
+                    },
                 },
-                "required": ["title", "link", "outlet"],
+                "required": ["article_id"],
             },
         },
+        "headline": {
+            "type": "STRING",
+            "description": "A short, neutral section headline for the whole topic's briefing (well under 12 words).",
+        },
+        "summary": {
+            "type": "STRING",
+            "description": (
+                "The synthesized briefing itself: 3-5 short paragraphs of "
+                "connected prose, separated by a blank line, per rules 2-4. "
+                "Not a bulleted or numbered list."
+            ),
+        },
     },
-    "required": ["headline", "summary", "sources"],
+    "propertyOrdering": ["sources", "headline", "summary"],
+    "required": ["sources", "headline", "summary"],
 }
 
 
@@ -178,52 +247,42 @@ def summarize_topic_with_gemini(topic_name, articles, max_developments):
     Ask Gemini for ONE briefing per topic.
 
     Multiple outlets covering the same development should be fused into that
-    single narrative (not listed as separate summaries). Return shape:
-    {headline, summary, sources: [{title, link, outlet}, ...]} or None.
+    single narrative (not listed as separate summaries). Sources are cited
+    by numeric id and resolved back to the real title/link/outlet from
+    `articles` below, so a mistyped or invented URL can never reach the
+    email. Return shape: {headline, summary, sources: [{title, link,
+    outlet}, ...]} or None.
     """
     if not articles:
         return None
 
-    trimmed = []
-    for a in articles:
-        trimmed.append({
+    # 1-indexed so the model's article_id citations map straight back to
+    # this dict without an off-by-one; only what's needed to pick and write
+    # about a story goes to the model, and never the link itself, so there's
+    # nothing for it to mistype or invent - the real link is substituted
+    # back in from `by_id` once Gemini has answered.
+    by_id = {i: a for i, a in enumerate(articles, start=1)}
+    numbered = [
+        {
+            "id": i,
             "title": a["title"],
-            "source": a["source"],
-            "link": a["link"],
+            "outlet": a["source"],
             "snippet": (a["summary"] or "")[:500],
-        })
+        }
+        for i, a in by_id.items()
+    ]
 
-    prompt = f"""You are a careful news editor writing a daily briefing section
-for the topic "{topic_name}". Below is a JSON list of recent articles from
-several outlets in the lookback window.
+    # Long data block first, short instruction with an anchor phrase last:
+    # Gemini attends to instructions placed right after a large context
+    # block more reliably than ones stated before it.
+    prompt = f"""Numbered articles for the topic "{topic_name}", most recent first:
 
-Hard rules:
-1. Produce exactly ONE briefing for this topic. Do not emit a list of
-   separate story summaries.
-2. Cluster coverage of the same event across outlets. When several feeds
-   report the same development, treat them as one thread and use their
-   combined detail to paint a fuller picture (who, what, where, stakes,
-   what happens next). Prefer corroboration over repeating the same lead.
-3. Inside that single briefing, cover at most the {max_developments} most
-   significant distinct developments. Weave them into one coherent
-   narrative (a few short paragraphs), not a bullet list of mini-stories.
-4. Stay neutral and factual. Use only information implied by the provided
-   titles/snippets. Do not invent quotes, numbers, or outcomes.
-5. In "sources", list the specific articles you relied on (typically 3-8),
-   preferring primary or clearer reporting when duplicates exist. Every
-   cited link must come from the article list below.
+{json.dumps(numbered, ensure_ascii=False)}
 
-Return ONLY valid JSON matching:
-{{
-  "headline": "short section headline for the whole topic",
-  "summary": "multi-paragraph briefing that synthesizes the day for this topic",
-  "sources": [
-    {{"title": "...", "link": "...", "outlet": "..."}}
-  ]
-}}
-
-Articles:
-{json.dumps(trimmed, ensure_ascii=False)}
+Based only on the numbered articles above, write today's "{topic_name}"
+briefing per your instructions. Cover at most {max_developments} of the
+most significant distinct developments, and cite each source by its
+numeric id.
 """
 
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
@@ -232,6 +291,7 @@ Articles:
         "x-goog-api-key": GEMINI_API_KEY,
     }
     body = {
+        "systemInstruction": {"parts": [{"text": SYSTEM_INSTRUCTION}]},
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {
             "temperature": 0.2,
@@ -322,19 +382,35 @@ Articles:
         print(f"  [warn] Gemini returned non-object JSON for {topic_name}", file=sys.stderr)
         return None
 
+    # Resolve cited article_ids back to the real article we fetched, rather
+    # than trusting any title/link/outlet text Gemini might return - this is
+    # what actually guarantees every link in the email is a real, live one.
     sources_in = brief.get("sources") or []
     sources = []
+    seen_ids = set()
     if isinstance(sources_in, list):
         for s in sources_in:
             if not isinstance(s, dict):
                 continue
-            link = str(s.get("link") or "").strip()
-            if not link:
+            try:
+                article_id = int(s.get("article_id"))
+            except (TypeError, ValueError):
                 continue
+            if article_id in seen_ids:
+                continue
+            article = by_id.get(article_id)
+            if article is None:
+                print(
+                    f"  [warn] Gemini cited unknown article_id {article_id} "
+                    f"for {topic_name}; dropping",
+                    file=sys.stderr,
+                )
+                continue
+            seen_ids.add(article_id)
             sources.append({
-                "title": str(s.get("title") or "(untitled)"),
-                "link": link,
-                "outlet": str(s.get("outlet") or s.get("source") or ""),
+                "title": article["title"],
+                "link": article["link"],
+                "outlet": article["source"],
             })
 
     summary = str(brief.get("summary") or "").strip()
