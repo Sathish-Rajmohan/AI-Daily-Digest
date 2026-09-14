@@ -312,8 +312,10 @@ STRUCTURE
 
 1. Write "overview" as 2-3 sentences saying what matters most in this topic \
 today. Someone who reads only the overview should still come away knowing \
-the day's main points. Do not write a label or a throat-clearing preamble \
-like "Here is today's summary".
+the day's main points. Tie the day together: say what the through-line is, \
+or which one development matters most and why. Do not open with a label or \
+a preamble like "Here is today's summary", and do not spend it restating \
+the subheadings one by one, since the reader sees those next.
 2. Write one entry in "stories" for each distinct development, up to the \
 limit given in the request. Two articles describing the same underlying \
 event, decision, or announcement are ONE story, not two, even when the \
@@ -322,7 +324,8 @@ outlets word it differently. Fuse them and combine their detail.
 the way a person would say it out loud. Good: "Ceasefire talks restart \
 after a week's pause". Bad: "Geopolitical Developments Update".
 4. "detail" is 2-3 short paragraphs on what happened, who it affects, and \
-why it matters. Separate paragraphs with a blank line. Do not repeat the \
+why it matters, or one paragraph where that is all the articles support \
+(rule 14). Separate paragraphs with a blank line. Do not repeat the \
 subheading as the first sentence.
 
 LANGUAGE
@@ -351,21 +354,26 @@ and attribute claims to whoever made them instead of stating them as fact.
 13. Fill "article_ids" for a story BEFORE writing its detail. List every \
 article that story draws on and no others. Never invent an id, and never \
 cite an article that does not support the claim you used it for.
+14. You are given short snippets, not full articles. Write what they \
+support and stop there. A thin story gets one short paragraph; do not pad \
+it out to three with background, restatement or hedging to reach a length. \
+Two solid paragraphs beat three padded ones.
 
-THE DENSITY TO AVOID
+DENSITY
 
-This is the single most important thing to get right. Compare:
+Density is the usual failure here, so compare these two:
 
-- WRONG (one 43-word sentence, three ideas stacked up): "The central bank, \
-which had been widely expected to continue its easing cycle following three \
-consecutive cuts, signalled a more cautious stance on Tuesday, sending bond \
-yields higher as investors repriced their expectations for the year."
-- RIGHT (three sentences, one idea each, 14 words on average): "The central \
-bank signalled it will slow down its rate cuts. Investors had expected \
-another cut after three in a row. Bond yields rose as they changed their \
-bets for the rest of the year."
+- WRONG (one 36-word sentence, three ideas stacked into it): "The central \
+bank, which had been widely expected to continue its easing cycle following \
+three consecutive cuts, signalled a more cautious stance on Tuesday, sending \
+bond yields higher as investors repriced their expectations for the year."
+- RIGHT (three sentences, one idea each, 16 words on average): "The central \
+bank signalled on Tuesday that it will slow down the pace of its rate cuts. \
+Investors had expected another cut, because the bank had already cut three \
+times in a row. Bond yields rose as those investors changed their bets for \
+the rest of the year."
 
-Both say the same thing. The second is the one to write, every time."""
+Both carry the same information. Write the second every time."""
 
 # Kept deliberately shallow. Flash-class models get unreliable on deeply
 # nested schemas (repetitive output, brackets left unclosed at the token
@@ -409,8 +417,9 @@ BRIEF_SCHEMA = {
                     "detail": {
                         "type": "STRING",
                         "description": (
-                            "2-3 short paragraphs separated by a blank line, "
-                            "per rule 4, following the language rules 5-9."
+                            "Up to 3 short paragraphs separated by a blank "
+                            "line, per rules 4 and 14, following the language "
+                            "rules 5-9."
                         ),
                     },
                 },
@@ -422,8 +431,9 @@ BRIEF_SCHEMA = {
             "type": "STRING",
             "description": (
                 "2-3 sentences on what matters most across this topic today, "
-                "per rule 1. Written after the stories, and standing on its "
-                "own for a reader who stops there."
+                "per rule 1. Written after the stories, standing on its own "
+                "for a reader who stops there, and not a restatement of the "
+                "subheadings."
             ),
         },
     },
@@ -521,17 +531,22 @@ def _retry_after(resp):
         return None
 
 
-def _gemini_request(model, prompt, system, schema, temperature):
+def _gemini_request(model, prompt, system, schema):
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
     headers = {
         "Content-Type": "application/json",
         "x-goog-api-key": GEMINI_API_KEY,
     }
+    # No temperature, top_p or top_k. Every model in the chain is a 3.x, and
+    # Google's guidance for that generation is to drop the sampling knobs
+    # and steer with the system instruction instead: these models are tuned
+    # around their defaults, and a low temperature is the documented cause of
+    # looping and degraded output. Looping is also exactly how they fail
+    # structured output, by repeating until the token limit cuts the JSON off.
     body = {
         "systemInstruction": {"parts": [{"text": system}]},
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {
-            "temperature": temperature,
             "responseMimeType": "application/json",
             "responseSchema": schema,
             # Set explicitly so a long topic can't run into a low default and
@@ -562,14 +577,16 @@ def _gemini_extract(data, topic_name):
         return None
 
 
-def _groq_request(model, prompt, system, schema, temperature):
+def _groq_request(model, prompt, system, schema):
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {GROQ_API_KEY}",
     }
+    # Temperature is left off here too. gpt-oss is documented as wanting the
+    # default of 1.0, and the schema below pins the structure regardless of
+    # how the sampler is set.
     body = {
         "model": model,
-        "temperature": temperature,
         "max_tokens": MAX_OUTPUT_TOKENS,
         "messages": [
             {"role": "system", "content": system},
@@ -615,7 +632,7 @@ _PROVIDERS = {
 }
 
 
-def _call_model(provider, model, prompt, topic_name, system, schema, temperature):
+def _call_model(provider, model, prompt, topic_name, system, schema):
     """
     Run one prompt against one model, retrying only what's worth retrying.
     Returns the model's raw JSON text, or None if it didn't answer in time.
@@ -623,7 +640,7 @@ def _call_model(provider, model, prompt, topic_name, system, schema, temperature
     caller drops it instead of trying it again on the next topic.
     """
     spec = _PROVIDERS[provider]
-    url, headers, body = spec["build"](model, prompt, system, schema, temperature)
+    url, headers, body = spec["build"](model, prompt, system, schema)
     label = f"{provider}/{model}"
 
     for attempt in range(1, ATTEMPTS_PER_MODEL + 1):
@@ -691,25 +708,55 @@ FACT_FIELDS = [
     "astronomy", "chemistry", "anthropology", "computer science",
 ]
 
+# Second rotating axis, and the one doing most of the work now that sampling
+# is left at its default. A field on its own is a broad ask, and asked the
+# same broad way every fortnight a model returns its most famous answer for
+# that field again and again. Pairing the field with an angle of approach
+# makes the request specific enough that the obvious answer often doesn't fit
+# it. 11 is coprime with the 14 fields, so a given pair doesn't come back for
+# 154 days rather than repeating every fortnight.
+FACT_ANGLES = [
+    "a measured quantity that is nothing like what people assume",
+    "how something actually works, one level below the usual explanation",
+    "a historical accident that still shapes something today",
+    "a hard limit, and what sets it",
+    "two things that look unrelated and turn out to share a cause",
+    "a name or term whose origin explains something about the thing itself",
+    "a case where the obvious explanation is wrong and the real one is known",
+    "a trade-off that cannot be engineered away",
+    "something that changed recently and quietly, against the textbook version",
+    "a comparison of scale that resets the reader's intuition",
+    "standard practice whose original reason has since disappeared",
+]
+
 FACT_SYSTEM = """You write one fact a day for a curious, well-read adult who \
 wants to finish it thinking about something they hadn't considered.
 
-1. Pick something specific and concrete. Not a generality, not a definition.
+Each request names a field and an angle to approach it from.
+
+1. Pick something specific and concrete from that field, and fit the angle \
+if a good fact fits it. The angle is there to steer you away from the \
+field's most famous fact, so treat it as a real constraint. If nothing solid \
+in the field genuinely fits the angle, pick the strongest fact from the \
+field and ignore the angle rather than forcing a bad match.
 2. Prefer the solidly established over the surprising but shaky. If a claim \
 is contested, or is one of those things "everyone knows" that turns out to \
 be folklore, leave it alone.
 3. The reader has already seen the usual circuit: honey never spoils, \
 bananas are radioactive, octopuses have three hearts, Napoleon was average \
-height. Skip anything in that family. Go for what an interested amateur \
-would not already have run into.
+height, the Great Wall is not visible from space. Skip anything in that \
+family. Aim past what an interested amateur would already have run into, \
+and past the one fact the field is most often illustrated with.
 4. Write "fact" as 1-2 plain sentences. No "did you know", no exclamation \
-marks, no build-up.
+marks, no build-up. Give the specific number, name, date or mechanism \
+rather than gesturing at it.
 5. Write "why" as 2-3 sentences on what the fact explains, what it connects \
 to, or what it should make the reader reconsider. This is the part that \
 earns the fact its place, so do not just restate the fact in other words.
 6. Same language rules as any good explainer: sentences averaging 15-20 \
-words, active voice, everyday vocabulary, and any technical term explained \
-in plain words the first time it appears."""
+words and never past 25, active voice, everyday vocabulary, one idea per \
+sentence, and any technical term explained in plain words the first time it \
+appears."""
 
 FACT_SCHEMA = {
     "type": "OBJECT",
@@ -741,18 +788,21 @@ def fetch_fact_of_the_day(today):
     Runs after the topics so news always gets first call on the time budget,
     and returns None rather than holding up the email if nothing answers.
     """
-    field = FACT_FIELDS[today.toordinal() % len(FACT_FIELDS)]
+    ordinal = today.toordinal()
+    field = FACT_FIELDS[ordinal % len(FACT_FIELDS)]
+    angle = FACT_ANGLES[ordinal % len(FACT_ANGLES)]
     print(f"Fetching the fact of the day ({field})...")
 
     def build_prompt(_cap):
         return (
-            f"Today is {today.strftime('%d %B %Y')}. Give one fact from "
-            f"{field}, chosen per your instructions."
+            f"Today is {today.strftime('%d %B %Y')}.\n"
+            f"Field: {field}\n"
+            f"Angle: {angle}\n\n"
+            "Give one fact from that field, approached from that angle, "
+            "chosen per your instructions."
         )
 
-    # Warmer than the briefings. At news temperature the same few answers
-    # come back for a given field no matter what day it is.
-    fact = run_chain(build_prompt, FACT_SYSTEM, FACT_SCHEMA, 0.95, "fact of the day")
+    fact = run_chain(build_prompt, FACT_SYSTEM, FACT_SCHEMA, "fact of the day")
     if not isinstance(fact, dict):
         return None
 
@@ -763,7 +813,7 @@ def fetch_fact_of_the_day(today):
     return {"field": field, "fact": text, "why": why}
 
 
-def run_chain(build_prompt, system, schema, temperature, label):
+def run_chain(build_prompt, system, schema, label):
     """
     Walk the provider chain until a model answers, then parse its JSON.
 
@@ -788,7 +838,7 @@ def run_chain(build_prompt, system, schema, temperature, label):
             break
         try:
             prompt = build_prompt(PROVIDER_ARTICLE_CAP.get(provider, MAX_ARTICLES_PER_TOPIC))
-            text = _call_model(provider, model, prompt, label, system, schema, temperature)
+            text = _call_model(provider, model, prompt, label, system, schema)
         except _ModelUnusable as e:
             print(f"  [warn] dropping {provider}/{model} for this run ({e})", file=sys.stderr)
             _unusable_models.add((provider, model))
@@ -851,26 +901,29 @@ def summarize_topic(topic_name, articles, max_developments):
             for i, a in list(by_id.items())[:cap]
         ]
 
-        # The article list comes first, and the instruction comes last with an
-        # anchor phrase pointing back at it. Gemini follows an instruction
-        # placed right after a large data block more reliably than one stated
-        # before it.
-        return f"""Numbered articles for the topic "{topic_name}", drawn from \
-{len({a["source"] for a in list(by_id.values())[:cap]})} outlets and cycled \
-through them so every outlet is represented:
-
+        # The article list comes first, fenced in a tag, and the instruction
+        # comes last with an anchor phrase pointing back at it. That ordering
+        # is what Google recommends for a prompt built around a large data
+        # block, and the tag gives the model an unambiguous boundary between
+        # the data and what to do with it.
+        return f"""<articles topic="{topic_name}" outlets="{
+            len({a["source"] for a in list(by_id.values())[:cap]})
+        }">
 {json.dumps(numbered, ensure_ascii=False)}
+</articles>
 
-Based only on the numbered articles above, write today's "{topic_name}"
-briefing per your instructions. Give at most {max_developments} stories,
-most significant first, and cite each one by the numeric ids it draws on.
-Judge significance by what happened, not by where an article sits in the
-list. Several outlets covering the same event is the strongest signal that
-it matters, so lead with those. Keep the sentences short and plain, per
-language rules 5-9.
+The articles above are cycled through the outlets, so every outlet is
+represented and position in the list carries no ranking.
+
+Based only on the articles above, write today's "{topic_name}" briefing per
+your instructions. Give at most {max_developments} stories, most significant
+first, and cite each one by the numeric ids it draws on. Judge significance
+by what happened, not by where an article sits in the list. Several outlets
+covering the same event is the strongest signal that it matters, so lead
+with those. Keep the sentences short and plain, per language rules 5-9.
 """
 
-    brief = run_chain(build_prompt, SYSTEM_INSTRUCTION, BRIEF_SCHEMA, 0.2, topic_name)
+    brief = run_chain(build_prompt, SYSTEM_INSTRUCTION, BRIEF_SCHEMA, topic_name)
     if brief is None:
         return None
 

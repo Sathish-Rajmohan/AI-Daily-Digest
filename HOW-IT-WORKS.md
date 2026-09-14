@@ -58,9 +58,15 @@ adjectives. "Keep it readable" and "average about 15-20 words" are not
 equally followable, and only one of them can be checked afterwards.
 
 The instruction ends with a worked before-and-after contrasting one dense
-43-word sentence against the same content as three short ones. Density is the
+36-word sentence against the same content as three short ones. Density is the
 specific failure mode here, and it is the one plain instructions are worst at
 preventing on their own.
+
+Both halves of that example are labelled with their own word counts, and both
+labels are true: the dense version really is 36 words, and the rewrite really
+averages 16, inside the 15-20 band the rules ask for. An example that misses
+the target it illustrates teaches the miss, so the counts are checked rather
+than asserted.
 
 Each run prints the average sentence length it actually got, per topic. If
 that starts reporting above 22 words, the instruction has stopped landing and
@@ -83,10 +89,19 @@ a quiet day produces fewer entries rather than padded ones.
 Above the news, each email opens with one fact and a short note on why it is
 worth knowing.
 
-The subject rotates by date through fourteen fields and comes back around
-after a fortnight, because a model left to choose freely returns to the same
-handful of chestnuts. The prompt also names the well-worn circuit of facts to
-avoid outright.
+A model left to choose freely returns to the same handful of chestnuts, so
+the request is narrowed on two axes at once. The date picks one of fourteen
+fields, and separately one of eleven angles of approach: a hard limit and
+what sets it, a historical accident that still shapes something, two things
+that share a cause, and so on. Eleven and fourteen share no factors, so a
+given field-and-angle pair does not come back for 154 days rather than
+repeating every fortnight.
+
+The angle is the part doing the work. A field on its own is a broad ask, and
+asked the same broad way it returns that field's most famous fact; pairing it
+with an angle usually makes the obvious answer not fit. The prompt also names
+the well-worn circuit to avoid outright, and lets the model drop the angle
+rather than force a bad match to it.
 
 This is the only part of the email not grounded in a fetched article. It
 carries no sources because it comes from the model's own knowledge rather
@@ -151,6 +166,19 @@ short article snippets into cited paragraphs this is the right class of model
 anyway. It is a read-and-compress job, not a reasoning one, and a larger model
 buys better prose rather than a better digest.
 
+No request sets `temperature`, `top_p` or `top_k`. Every model in the chain
+is a Gemini 3.x, and Google's guidance for that generation is to drop the
+sampling parameters entirely and steer with the system instruction instead;
+these models are tuned around their defaults, and a low temperature is the
+documented cause of looping and degraded output. Looping also happens to be
+how they fail structured output, by repeating until the token limit cuts the
+JSON off mid-string. Groq's gpt-oss wants its default of 1.0 for the same
+reason, so leaving the parameter off suits both providers.
+
+That puts the whole job of producing a different fact each day on the prompt
+rather than on the sampler, which is why the fact rotates on two axes rather
+than one.
+
 The schema is kept deliberately shallow for the same reason the chain exists:
 Flash-class models get unreliable on deeply nested schemas, and Google's docs
 warn that large or deeply nested schemas may be rejected outright.
@@ -201,9 +229,9 @@ and returns `None` or:
 ```
 
 To add a provider, write a `_yourprovider_request(model, prompt, system,
-schema, temperature)` returning `(url, headers, body)` and a
-`_yourprovider_extract(data, label)` returning the model's raw JSON text,
-register both in `_PROVIDERS`, and add its models in `build_model_chain()`.
+schema)` returning `(url, headers, body)` and a `_yourprovider_extract(data,
+label)` returning the model's raw JSON text, register both in `_PROVIDERS`,
+and add its models in `build_model_chain()`.
 
 Retries, backoff, the shared time budget and the citation resolution are all
 provider-agnostic, so there is nothing else to touch. Anything speaking the
