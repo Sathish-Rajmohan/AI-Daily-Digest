@@ -29,6 +29,13 @@ from dateutil import parser as dateparser
 
 CONFIG_PATH = os.environ.get("DIGEST_CONFIG_PATH", "topics.json")
 
+# When stdout is piped (as in Actions logs) Python block-buffers it, while
+# stderr stays unbuffered. The two can then land out of chronological order
+# in a combined log even though they were printed in order, which is
+# confusing to read after the fact. Line-buffer stdout so progress lines
+# and warning lines interleave the way they actually happened.
+sys.stdout.reconfigure(line_buffering=True)
+
 # Cap how many raw articles we ship to the model per topic. Free-tier
 # prompts stay smaller and a runaway feed can't blow up the request.
 MAX_ARTICLES_PER_TOPIC = 40
@@ -149,7 +156,7 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 # "gemini-flash-latest" is Google's alias for the current Flash release.
 # Override with GEMINI_MODEL if you want to pin a dated ID.
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-flash-latest")
-GEMINI_MAX_RETRIES = 3
+GEMINI_MAX_RETRIES = 4
 
 # Persona and standing rules live in systemInstruction, not the user turn.
 # Gemini processes system instructions before the request content, so they
@@ -322,6 +329,20 @@ numeric id.
                     "project isn't restricted or awaiting verification.",
                     file=sys.stderr,
                 )
+            if resp.status_code in (500, 502, 503, 504):
+                # These are Google's own outage/overload errors, not
+                # something a config change here fixes. gemini-flash-latest
+                # is shared, high-traffic capacity, and these tend to be
+                # short blips rather than sustained outages.
+                wait = 15 * attempt
+                print(
+                    f"  [warn] Gemini API returned {resp.status_code} "
+                    f"(server-side, temporary), waiting {wait}s before "
+                    f"retry {attempt}/{GEMINI_MAX_RETRIES}",
+                    file=sys.stderr,
+                )
+                time.sleep(wait)
+                continue
             resp.raise_for_status()
             data = resp.json()
             break
@@ -439,7 +460,10 @@ def _summary_to_html(summary):
 
 def build_html(topic_results, date_str):
     sections = []
-    for topic_name, brief in topic_results:
+    failed_topics = []
+    for topic_name, brief, note in topic_results:
+        if note:
+            failed_topics.append(topic_name)
         if not brief:
             continue
 
@@ -478,11 +502,21 @@ def build_html(topic_results, date_str):
 
     body = "".join(sections) if sections else "<p>No new stories found in the lookback window.</p>"
 
+    failure_notice = ""
+    if failed_topics:
+        names = ", ".join(html.escape(n) for n in failed_topics)
+        failure_notice = f"""
+      <div style="margin:0 0 24px 0;padding:12px 14px;background:#fff8e1;border:1px solid #f0dca0;border-radius:6px;font-size:13px;color:#7a5c00;">
+        Skipped this run: {names}. Check the Actions log for details.
+      </div>
+        """
+
     return f"""
     <html>
     <body style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;max-width:640px;margin:0 auto;padding:20px;background:#fafafa;">
       <h1 style="font-size:22px;margin-bottom:4px;">Your Daily Digest</h1>
       <div style="color:#888;font-size:13px;margin-bottom:24px;">{html.escape(date_str)}</div>
+      {failure_notice}
       {body}
       <div style="margin-top:30px;padding-top:16px;border-top:1px solid #ddd;font-size:12px;color:#999;">
         Generated automatically. Edit topics.json in your repo to customize topics and sources.
@@ -547,13 +581,16 @@ def main():
             articles = fetch_topic_articles(topic, lookback_hours)
         except Exception as e:
             print(f"  [error] fetch failed for '{name}': {e}", file=sys.stderr)
-            topic_results.append((name, None))
+            topic_results.append((name, None, "its feeds couldn't be fetched this run"))
             continue
 
         print(f"  found {len(articles)} raw articles (capped at {MAX_ARTICLES_PER_TOPIC})")
 
         if not articles:
-            topic_results.append((name, None))
+            # Genuinely no new articles in the lookback window. Not a
+            # failure, so no note, and no mention in the email's failure
+            # notice below.
+            topic_results.append((name, None, None))
             continue
 
         print(f"  writing one synthesized brief with {GEMINI_MODEL}...")
@@ -565,14 +602,15 @@ def main():
         if brief:
             n_sources = len(brief.get("sources") or [])
             print(f"  got briefing with {n_sources} cited sources")
+            topic_results.append((name, brief, None))
         else:
             print("  got no briefing")
-        topic_results.append((name, brief))
+            topic_results.append((name, None, "no summary came back this run"))
 
         # Be gentle on free-tier rate limits across topics.
         time.sleep(2)
 
-    if not any(brief for _, brief in topic_results):
+    if not any(brief for _, brief, _ in topic_results):
         print(
             "WARNING: every topic came back empty. Still sending a stub email "
             "so you notice the run happened.",

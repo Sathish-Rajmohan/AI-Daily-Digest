@@ -190,6 +190,13 @@ confirm 2-Step Verification is on.
 **Gemini 403:** account/project issue in AI Studio more often than a code bug.
 Check [aistudio.google.com/app/apikey](https://aistudio.google.com/app/apikey).
 
+**Gemini 500/502/503/504:** Google's own capacity, usually a short-lived
+overload on a shared model like `gemini-flash-latest`. The script retries
+these with a longer backoff than a plain network error. A topic that still
+comes back empty after retries shows up as a "Skipped this run: ..." notice
+at the top of the email instead of silently vanishing from it; the run
+itself still succeeds and sends what it has.
+
 ---
 
 ## Security
