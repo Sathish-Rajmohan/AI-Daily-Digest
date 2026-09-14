@@ -12,6 +12,7 @@ Config stored in topics.json and environment variables (see README.md).
 import html
 import json
 import os
+import random
 import re
 import smtplib
 import socket
@@ -153,10 +154,44 @@ def fetch_topic_articles(topic, lookback_hours):
 
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
-# "gemini-flash-latest" is Google's alias for the current Flash release.
-# Override with GEMINI_MODEL if you want to pin a dated ID.
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-flash-latest")
-GEMINI_MAX_RETRIES = 4
+
+# A 503 from Gemini means one model's shared serving pool is out of capacity
+# right now. Waiting and asking the same pool again usually returns the same
+# 503, so the chain below moves to a different model instead. Order runs from
+# the current Flash release down to the lighter Flash-Lite tier, which sits on
+# less contended capacity. Quality degrades a little at the bottom of the
+# chain, which beats a topic missing from the email.
+GEMINI_MODELS = [
+    m.strip()
+    for m in os.environ.get(
+        "GEMINI_MODELS",
+        "gemini-flash-latest,gemini-3.6-flash,gemini-3.5-flash,gemini-3.5-flash-lite",
+    ).split(",")
+    if m.strip()
+]
+
+# GEMINI_MODEL still pins a first choice, with the rest of the chain kept
+# underneath it as fallbacks.
+_pinned_model = os.environ.get("GEMINI_MODEL")
+if _pinned_model:
+    GEMINI_MODELS = [_pinned_model] + [m for m in GEMINI_MODELS if m != _pinned_model]
+
+# An empty or all-whitespace override would otherwise leave nothing to call.
+if not GEMINI_MODELS:
+    GEMINI_MODELS = ["gemini-flash-latest"]
+
+# Attempts against a single model before moving down the chain. Three is
+# enough to ride out a brief blip; past that the pool is genuinely saturated
+# and another model is the faster route to an answer.
+GEMINI_ATTEMPTS_PER_MODEL = 3
+GEMINI_BACKOFF_BASE = 4
+GEMINI_REQUEST_TIMEOUT = 90
+
+# Ceiling on the wall-clock time all Gemini work may take in one run. Without
+# it, a broad outage means every topic serially exhausts its own retry budget
+# and the job runs until the workflow timeout kills it mid-flight, sending
+# nothing at all.
+GEMINI_TOTAL_BUDGET = 480
 
 # Persona and standing rules live in systemInstruction, not the user turn.
 # Gemini processes system instructions before the request content, so they
@@ -249,6 +284,139 @@ BRIEF_SCHEMA = {
 }
 
 
+class _ModelUnusable(Exception):
+    """The model name itself is rejected, so no amount of retrying helps."""
+
+
+# Models this run has already seen rejected, and the cutoff for all Gemini
+# work. Both are per-process: one bad model name or one dead key shouldn't
+# be re-probed once per topic.
+_unusable_models = set()
+_gemini_deadline = None
+
+
+def start_gemini_budget():
+    global _gemini_deadline
+    _gemini_deadline = time.monotonic() + GEMINI_TOTAL_BUDGET
+
+
+def end_gemini_budget():
+    """Spend the remaining budget immediately, so later topics don't retry."""
+    global _gemini_deadline
+    _gemini_deadline = time.monotonic()
+
+
+def _budget_left():
+    if _gemini_deadline is None:
+        return float("inf")
+    return _gemini_deadline - time.monotonic()
+
+
+def _sleep_within_budget(seconds):
+    """Sleep, never past the deadline. False means there's no time left."""
+    left = _budget_left()
+    if left <= 0:
+        return False
+    time.sleep(max(0.0, min(seconds, left)))
+    return _budget_left() > 0
+
+
+def _backoff(attempt):
+    """
+    Exponential with jitter. The jitter matters more than the growth here:
+    a fixed schedule means every retry lands on the same congested moment,
+    while an offset one has a chance of arriving after capacity frees up.
+    """
+    base = GEMINI_BACKOFF_BASE * (2 ** (attempt - 1))
+    return base * (0.7 + random.random() * 0.6)
+
+
+def _retry_after(resp):
+    """Seconds from a Retry-After header, capped so a large value can't
+    swallow the whole run's budget. None when absent or unparseable."""
+    raw = (resp.headers.get("Retry-After") or "").strip()
+    if not raw:
+        return None
+    try:
+        return max(0.0, min(float(raw), 60.0))
+    except ValueError:
+        return None
+
+
+def _call_gemini(model, body):
+    """
+    Run one request body against one model, retrying only what's worth
+    retrying. Returns the parsed response, or None if this model didn't
+    answer in time. Raises _ModelUnusable when the model name is the
+    problem, so the caller drops it instead of trying it again next topic.
+    """
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+    headers = {
+        "Content-Type": "application/json",
+        "x-goog-api-key": GEMINI_API_KEY,
+    }
+
+    for attempt in range(1, GEMINI_ATTEMPTS_PER_MODEL + 1):
+        if _budget_left() <= 0:
+            return None
+
+        try:
+            resp = requests.post(
+                url, headers=headers, json=body, timeout=GEMINI_REQUEST_TIMEOUT
+            )
+        except requests.exceptions.RequestException as e:
+            print(f"  [warn] {model}: request failed ({e})", file=sys.stderr)
+            if attempt == GEMINI_ATTEMPTS_PER_MODEL:
+                return None
+            if not _sleep_within_budget(_backoff(attempt)):
+                return None
+            continue
+
+        code = resp.status_code
+
+        if code == 200:
+            return resp.json()
+
+        if code in (400, 404):
+            # Wrong or retired model ID for this key. Every later call to it
+            # would fail the same way.
+            raise _ModelUnusable(f"{code}: {resp.text[:200]}")
+
+        if code == 403:
+            print(
+                "  [error] Gemini API returned 403 PERMISSION_DENIED. "
+                "Check that your API key is active in Google AI Studio "
+                "(https://aistudio.google.com/app/apikey) and that the "
+                "project isn't restricted or awaiting verification. "
+                "Skipping the remaining Gemini calls this run.",
+                file=sys.stderr,
+            )
+            end_gemini_budget()
+            return None
+
+        if code in (429, 500, 502, 503, 504):
+            if attempt == GEMINI_ATTEMPTS_PER_MODEL:
+                print(
+                    f"  [warn] {model}: {code} on the last attempt, moving on",
+                    file=sys.stderr,
+                )
+                return None
+            wait = _retry_after(resp) or _backoff(attempt)
+            print(
+                f"  [warn] {model}: {code}, retrying in {wait:.0f}s "
+                f"({attempt}/{GEMINI_ATTEMPTS_PER_MODEL})",
+                file=sys.stderr,
+            )
+            if not _sleep_within_budget(wait):
+                return None
+            continue
+
+        print(f"  [warn] {model}: unexpected {code}: {resp.text[:200]}", file=sys.stderr)
+        return None
+
+    return None
+
+
 def summarize_topic_with_gemini(topic_name, articles, max_developments):
     """
     Ask Gemini for ONE briefing per topic.
@@ -292,11 +460,6 @@ most significant distinct developments, and cite each source by its
 numeric id.
 """
 
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
-    headers = {
-        "Content-Type": "application/json",
-        "x-goog-api-key": GEMINI_API_KEY,
-    }
     body = {
         "systemInstruction": {"parts": [{"text": SYSTEM_INSTRUCTION}]},
         "contents": [{"parts": [{"text": prompt}]}],
@@ -307,60 +470,40 @@ numeric id.
         },
     }
 
+    # Walk the chain until a model answers. Each one that doesn't costs a
+    # few seconds rather than the minutes a same-model retry loop spends
+    # waiting on capacity that isn't coming back.
     data = None
-    last_error = None
-    for attempt in range(1, GEMINI_MAX_RETRIES + 1):
-        try:
-            resp = requests.post(url, headers=headers, json=body, timeout=90)
-            if resp.status_code == 429:
-                wait = 15 * attempt
-                print(
-                    f"  [warn] rate limited (429), waiting {wait}s before retry "
-                    f"{attempt}/{GEMINI_MAX_RETRIES}",
-                    file=sys.stderr,
-                )
-                time.sleep(wait)
-                continue
-            if resp.status_code == 403:
-                print(
-                    "  [error] Gemini API returned 403 PERMISSION_DENIED. "
-                    "Check that your API key is active in Google AI Studio "
-                    "(https://aistudio.google.com/app/apikey) and that the "
-                    "project isn't restricted or awaiting verification.",
-                    file=sys.stderr,
-                )
-            if resp.status_code in (500, 502, 503, 504):
-                # These are Google's own outage/overload errors, not
-                # something a config change here fixes. gemini-flash-latest
-                # is shared, high-traffic capacity, and these tend to be
-                # short blips rather than sustained outages.
-                wait = 15 * attempt
-                print(
-                    f"  [warn] Gemini API returned {resp.status_code} "
-                    f"(server-side, temporary), waiting {wait}s before "
-                    f"retry {attempt}/{GEMINI_MAX_RETRIES}",
-                    file=sys.stderr,
-                )
-                time.sleep(wait)
-                continue
-            resp.raise_for_status()
-            data = resp.json()
-            break
-        except requests.exceptions.RequestException as e:
-            last_error = e
+    answered_by = None
+    for model in GEMINI_MODELS:
+        if model in _unusable_models:
+            continue
+        if _budget_left() <= 0:
             print(
-                f"  [warn] request failed (attempt {attempt}/{GEMINI_MAX_RETRIES}): {e}",
+                f"  [error] out of Gemini time budget before '{topic_name}'",
                 file=sys.stderr,
             )
-            time.sleep(5 * attempt)
+            break
+        try:
+            data = _call_gemini(model, body)
+        except _ModelUnusable as e:
+            print(f"  [warn] dropping model {model} for this run ({e})", file=sys.stderr)
+            _unusable_models.add(model)
+            continue
+        if data is not None:
+            answered_by = model
+            break
+        print(f"  [warn] {model} didn't answer, trying the next model", file=sys.stderr)
 
     if data is None:
         print(
-            f"  [error] giving up on topic '{topic_name}' after "
-            f"{GEMINI_MAX_RETRIES} attempts: {last_error}",
+            f"  [error] no model answered for topic '{topic_name}'",
             file=sys.stderr,
         )
         return None
+
+    if answered_by != GEMINI_MODELS[0]:
+        print(f"  [info] answered by fallback model {answered_by}")
 
     # Blocked / empty candidates (safety filters, etc.)
     candidates = data.get("candidates") or []
@@ -447,6 +590,28 @@ numeric id.
     }
 
 
+def headlines_only_brief(articles, max_developments):
+    """
+    Stand-in for a topic when no model would answer. The articles are
+    already fetched and their titles and links are real, so the topic can
+    still carry usable news instead of dropping out of the email. Flagged
+    degraded so build_html can label it rather than pass it off as a
+    written brief.
+    """
+    picked = articles[: max(3, min(max_developments, 6))]
+    if not picked:
+        return None
+    return {
+        "headline": None,
+        "summary": None,
+        "degraded": True,
+        "sources": [
+            {"title": a["title"], "link": a["link"], "outlet": a["source"]}
+            for a in picked
+        ],
+    }
+
+
 # Muted grays and a single accent blue, deliberately not pure black or
 # white. Gmail's mobile apps auto-invert colors in dark mode regardless of
 # any CSS here, and extreme values invert harshest. Everything below stays
@@ -508,8 +673,20 @@ def build_html(topic_results, date_str):
             continue
         topic_names.append(topic_name)
 
-        headline = html.escape(brief.get("headline") or topic_name)
-        summary_html = _summary_to_html(brief.get("summary") or "")
+        degraded = bool(brief.get("degraded"))
+        if degraded:
+            # No model answered for this topic, so the section carries the
+            # raw headlines instead. Say so plainly rather than letting a
+            # bare link list read like an editorial choice.
+            headline = "Top headlines"
+            summary_html = (
+                f'<p style="font-size:13px;color:{_TEXT_MUTED};line-height:1.6;'
+                f'margin:0 0 14px 0;">No summary was available for this topic '
+                f'this run, so the latest stories are listed directly.</p>'
+            )
+        else:
+            headline = html.escape(brief.get("headline") or topic_name)
+            summary_html = _summary_to_html(brief.get("summary") or "")
 
         sources_html = ""
         for s in brief.get("sources") or []:
@@ -528,10 +705,11 @@ def build_html(topic_results, date_str):
 
         sources_block = ""
         if sources_html:
+            list_label = "Stories" if degraded else "Sources"
             sources_block = f"""
             <div style="margin-top:16px;">
               <div style="font-size:11px;font-weight:700;letter-spacing:0.06em;
-                text-transform:uppercase;color:{_TEXT_MUTED};margin-bottom:8px;">Sources</div>
+                text-transform:uppercase;color:{_TEXT_MUTED};margin-bottom:8px;">{list_label}</div>
               <ul style="margin:0;padding:0;list-style:none;font-size:13px;
                 line-height:1.5;">{sources_html}</ul>
             </div>
@@ -666,6 +844,7 @@ def main():
         local_tz = timezone.utc
 
     topic_results = []
+    start_gemini_budget()
     for topic in config["topics"]:
         name = topic.get("name") or "Untitled"
         # How many distinct developments to fold into the single topic brief.
@@ -687,7 +866,7 @@ def main():
             topic_results.append((name, None, None))
             continue
 
-        print(f"  writing one synthesized brief with {GEMINI_MODEL}...")
+        print(f"  writing one synthesized brief with {GEMINI_MODELS[0]}...")
         try:
             brief = summarize_topic_with_gemini(name, articles, max_developments)
         except Exception as e:
@@ -698,8 +877,15 @@ def main():
             print(f"  got briefing with {n_sources} cited sources")
             topic_results.append((name, brief, None))
         else:
-            print("  got no briefing")
-            topic_results.append((name, None, "no summary came back this run"))
+            # Nothing summarized, but the articles are in hand, so send the
+            # headlines rather than an empty slot where the topic should be.
+            fallback = headlines_only_brief(articles, max_developments)
+            if fallback:
+                print(f"  no briefing; listing {len(fallback['sources'])} headlines instead")
+                topic_results.append((name, fallback, None))
+            else:
+                print("  got no briefing")
+                topic_results.append((name, None, "no summary came back this run"))
 
         # Be gentle on free-tier rate limits across topics.
         time.sleep(2)

@@ -47,9 +47,14 @@ quota (plenty for one short daily job).
    by default.
 3. Copy the key for step 4.
 
-The script defaults to `gemini-flash-latest`, Google's alias for the current
-Flash model, so you don't have to chase dated model IDs when Google rotates
-them. Pin a specific ID with the `GEMINI_MODEL` env var if you want.
+The script tries `gemini-flash-latest`, Google's alias for the current Flash
+model, then falls back through `gemini-3.6-flash`, `gemini-3.5-flash`, and
+`gemini-3.5-flash-lite` if that one is overloaded. Each model sits on its own
+serving capacity, so a model that returns 503 doesn't stop the run. Set
+`GEMINI_MODELS` to a comma-separated list to change the chain, or
+`GEMINI_MODEL` to pin a first choice and keep the rest as fallbacks. A model
+ID your key can't use is dropped after one try, so an outdated entry in the
+chain costs a fraction of a second rather than breaking the run.
 
 One digest run is a handful of requests (one per topic). Exact free-tier RPM/RPD
 numbers vary by model and project; check
@@ -190,12 +195,14 @@ confirm 2-Step Verification is on.
 **Gemini 403:** account/project issue in AI Studio more often than a code bug.
 Check [aistudio.google.com/app/apikey](https://aistudio.google.com/app/apikey).
 
-**Gemini 500/502/503/504:** Google's own capacity, usually a short-lived
-overload on a shared model like `gemini-flash-latest`. The script retries
-these with a longer backoff than a plain network error. A topic that still
-comes back empty after retries shows up as a "Skipped this run: ..." notice
-at the top of the email instead of silently vanishing from it; the run
-itself still succeeds and sends what it has.
+**Gemini 500/502/503/504:** Google's own capacity. A 503 means one model's
+shared serving pool is saturated, which affects free and paid traffic alike,
+so it isn't something a billing or quota change fixes. Asking the same model
+again usually returns the same 503, so the script retries briefly and then
+moves down the model chain instead of waiting longer. Look for
+`answered by fallback model ...` in the Actions log to see this working. If
+no model answers, the topic still appears in the email as a plain list of
+headlines under a "Top headlines" label rather than dropping out of it.
 
 ---
 
