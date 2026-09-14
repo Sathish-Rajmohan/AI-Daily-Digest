@@ -14,6 +14,7 @@ import json
 import os
 import re
 import smtplib
+import socket
 import ssl
 import sys
 import time
@@ -32,6 +33,12 @@ CONFIG_PATH = os.environ.get("DIGEST_CONFIG_PATH", "topics.json")
 # prompts stay smaller and a runaway feed can't blow up the request.
 MAX_ARTICLES_PER_TOPIC = 40
 FEED_FETCH_TIMEOUT = 20
+
+# feedparser's own fetch path (used as a fallback in fetch_feed() below)
+# doesn't take a timeout argument and can hang indefinitely on a bad host.
+# It falls back to the socket module's default timeout when none is given
+# explicitly, so set that process-wide to keep a worst-case feed bounded.
+socket.setdefaulttimeout(FEED_FETCH_TIMEOUT)
 
 USER_AGENT = (
     "daily-digest/1.0 (+https://github.com/Sathish-Rajmohan/AI-Daily-News-Digest; "

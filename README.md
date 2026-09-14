@@ -97,7 +97,14 @@ In the repo: **Settings → Secrets and variables → Actions → New repository
 After a successful manual run, the schedule takes over.
 
 **Note:** on public repos, scheduled workflows go idle if the repo has no
-activity for 60 days. A commit or a manual Actions run wakes them back up.
+activity for 60 days. `.github/workflows/keepalive.yml` handles this
+automatically with a monthly empty commit, well inside that window, so you
+shouldn't need to think about it. It needs the repo's default `GITHUB_TOKEN`
+to be allowed to push: **Settings → Actions → General → Workflow
+permissions → Read and write permissions**. If that's left on the default
+read-only setting, the keepalive job's push step will fail (visible in its
+Actions log) and you'd want to switch it, or just push a real commit every
+couple of months yourself instead.
 
 ---
 
@@ -131,10 +138,15 @@ Search `"site name" RSS feed`, or try `/rss`, `/feed`, `/rss.xml` on the domain.
 A browser showing XML with `<item>` or `<entry>` tags means you're good.
 
 The stock config covers Tech & AI, International News, Geopolitics & Security,
-Science & Health, and Markets & Business: BBC, Guardian, NYT, FT, WSJ, NPR,
+Science & Health, and Markets & Business: BBC, Guardian, NYT, FT, NPR,
 Al Jazeera, ABC Australia, SCMP, Foreign Policy, Foreign Affairs, Defense One,
-Nature, WHO, Bloomberg, and a few others. Dead or blocked feeds (notably the
-old Reuters and AP public RSS URLs) were left out on purpose.
+Nature, Bloomberg, and a few others. Dead or blocked feeds were left out on
+purpose, including the old Reuters and AP public RSS URLs, the WSJ feeds at
+`feeds.a.dj.com` (stopped publishing in early 2025), and the UN and WHO news
+feeds (both effectively abandoned, with no new items in months to years). All
+feed URLs were spot-checked for a live, recently-updated response before
+being added; if one goes stale later, `found 0 raw articles` in the Actions
+log for that topic over several days running is the tell.
 
 ---
 

@@ -1,0 +1,29 @@
+name: Keepalive
+
+# GitHub disables scheduled workflows on a public repo after 60 days with
+# no repository activity (a push, release, or merged PR; workflow runs
+# themselves don't count). This makes a trivial empty commit well inside
+# that window so the daily digest schedule never goes idle on its own.
+on:
+  schedule:
+    - cron: "0 0 1 * *"   # 00:00 UTC on the 1st of every month
+      timezone: "Australia/Sydney"
+  workflow_dispatch: {}   # manual run from the Actions tab
+
+permissions:
+  contents: write
+
+jobs:
+  keepalive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v7
+
+      - name: Make an empty commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git commit --allow-empty -m "chore: keepalive (prevent 60-day schedule idle)"
+          git push

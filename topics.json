@@ -32,7 +32,6 @@
         "https://feeds.washingtonpost.com/rss/world",
         "https://www.latimes.com/world-nation/rss2.0.xml",
         "https://www.ft.com/world?format=rss",
-        "https://feeds.a.dj.com/rss/RSSWorldNews.xml",
         "https://www.abc.net.au/news/feed/51120/rss.xml",
         "https://www.smh.com.au/rss/world.xml",
         "https://www.scmp.com/rss/91/feed"
@@ -46,8 +45,7 @@
         "https://www.foreignaffairs.com/rss.xml",
         "https://www.economist.com/international/rss.xml",
         "https://www.defenseone.com/rss/all/",
-        "https://www.lowyinstitute.org/the-interpreter/rss.xml",
-        "https://www.un.org/en/rss.xml"
+        "https://www.lowyinstitute.org/the-interpreter/rss.xml"
       ]
     },
     {
@@ -57,7 +55,6 @@
         "https://feeds.nature.com/nature/rss/current",
         "https://www.sciencedaily.com/rss/top/science.xml",
         "https://feeds.bbci.co.uk/news/science_and_environment/rss.xml",
-        "https://www.who.int/rss-feeds/news-english.xml",
         "https://www.statnews.com/feed/",
         "https://www.technologyreview.com/feed/"
       ]
@@ -73,7 +70,6 @@
         "https://www.ft.com/companies?format=rss",
         "https://rss.nytimes.com/services/xml/rss/nyt/Business.xml",
         "https://www.economist.com/finance-and-economics/rss.xml",
-        "https://feeds.a.dj.com/rss/WSJcomUSBusiness.xml",
         "https://stratechery.com/feed/",
         "https://www.ben-evans.com/benedictevans?format=rss"
       ]
