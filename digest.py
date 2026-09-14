@@ -447,25 +447,66 @@ numeric id.
     }
 
 
+# Muted grays and a single accent blue, deliberately not pure black or
+# white. Gmail's mobile apps auto-invert colors in dark mode regardless of
+# any CSS here, and extreme values invert harshest. Everything below stays
+# a solid AA contrast ratio against a white card.
+_FONT_STACK = (
+    '-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif'
+)
+_PAGE_BG = "#eef1f5"
+_CARD_BG = "#ffffff"
+_TEXT_HEADING = "#161a23"
+_TEXT_BODY = "#39414f"
+_TEXT_MUTED = "#67707d"
+_ACCENT = "#2454c7"
+_BORDER = "#e6e9ee"
+_WARN_BG = "#fff8e6"
+_WARN_BORDER = "#f0dca0"
+_WARN_TEXT = "#8a6100"
+
+
 def _summary_to_html(summary):
     """Turn paragraph breaks in the briefing into HTML paragraphs."""
     parts = [p.strip() for p in re.split(r"\n\s*\n", summary) if p.strip()]
     if not parts:
         parts = [summary.strip()]
     return "".join(
-        f'<p style="font-size:14px;color:#333;line-height:1.55;margin:0 0 12px 0;">{html.escape(p)}</p>'
+        f'<p style="font-size:15px;color:{_TEXT_BODY};line-height:1.6;'
+        f'margin:0 0 14px 0;">{html.escape(p)}</p>'
         for p in parts
     )
+
+
+def _build_preheader(topic_results):
+    """
+    Short summary shown as the inbox preview line, built from whatever
+    headlines actually came back this run. Capped well under what any
+    client displays, so it never gets cut off mid-thought.
+    """
+    headlines = [
+        (brief.get("headline") or "").strip()
+        for _, brief, _ in topic_results
+        if brief and (brief.get("headline") or "").strip()
+    ]
+    if not headlines:
+        return "Your daily digest is ready."
+    text = " • ".join(headlines)
+    if len(text) > 140:
+        text = text[:137].rstrip() + "..."
+    return text
 
 
 def build_html(topic_results, date_str):
     sections = []
     failed_topics = []
+    topic_names = []
     for topic_name, brief, note in topic_results:
         if note:
             failed_topics.append(topic_name)
         if not brief:
             continue
+        topic_names.append(topic_name)
 
         headline = html.escape(brief.get("headline") or topic_name)
         summary_html = _summary_to_html(brief.get("summary") or "")
@@ -475,52 +516,105 @@ def build_html(topic_results, date_str):
             title = html.escape(s.get("title", "(untitled)"))
             link = html.escape(s.get("link", "#"), quote=True)
             outlet = html.escape(s.get("outlet", ""))
-            outlet_bit = f" <span style=\"color:#888;\">({outlet})</span>" if outlet else ""
+            outlet_bit = (
+                f' <span style="color:{_TEXT_MUTED};">({outlet})</span>' if outlet else ""
+            )
             sources_html += (
-                f'<li style="margin:0 0 6px 0;">'
-                f'<a href="{link}" style="color:#2563eb;text-decoration:none;">{title}</a>'
-                f"{outlet_bit}</li>"
+                f'<li style="margin:0 0 7px 0;">'
+                f'<span style="color:{_ACCENT};">&#8250;</span> '
+                f'<a href="{link}" style="color:{_ACCENT};text-decoration:none;'
+                f'font-weight:500;">{title}</a>{outlet_bit}</li>'
             )
 
         sources_block = ""
         if sources_html:
             sources_block = f"""
-            <div style="margin-top:14px;">
-              <div style="font-size:12px;letter-spacing:0.04em;text-transform:uppercase;color:#888;margin-bottom:6px;">Sources</div>
-              <ul style="margin:0;padding-left:18px;font-size:13px;line-height:1.4;">{sources_html}</ul>
+            <div style="margin-top:16px;">
+              <div style="font-size:11px;font-weight:700;letter-spacing:0.06em;
+                text-transform:uppercase;color:{_TEXT_MUTED};margin-bottom:8px;">Sources</div>
+              <ul style="margin:0;padding:0;list-style:none;font-size:13px;
+                line-height:1.5;">{sources_html}</ul>
             </div>
             """
 
         sections.append(f"""
-        <div style="margin-bottom:34px;">
-          <h2 style="font-size:19px;border-bottom:2px solid #1a1a1a;padding-bottom:6px;margin-bottom:8px;">{html.escape(topic_name)}</h2>
-          <div style="font-size:15px;font-weight:600;color:#1a1a1a;margin:0 0 10px 0;">{headline}</div>
+        <div style="padding:26px 0;border-top:1px solid {_BORDER};">
+          <div style="font-size:11px;font-weight:700;letter-spacing:0.07em;
+            text-transform:uppercase;color:{_ACCENT};margin-bottom:8px;">{html.escape(topic_name)}</div>
+          <div style="font-size:17px;font-weight:700;color:{_TEXT_HEADING};
+            line-height:1.35;margin-bottom:12px;">{headline}</div>
           {summary_html}
           {sources_block}
         </div>
         """)
 
-    body = "".join(sections) if sections else "<p>No new stories found in the lookback window.</p>"
+    body = "".join(sections) if sections else (
+        f'<div style="padding:26px 0;border-top:1px solid {_BORDER};'
+        f'font-size:15px;color:{_TEXT_BODY};">No new stories found in the '
+        f'lookback window.</div>'
+    )
 
     failure_notice = ""
     if failed_topics:
         names = ", ".join(html.escape(n) for n in failed_topics)
         failure_notice = f"""
-      <div style="margin:0 0 24px 0;padding:12px 14px;background:#fff8e1;border:1px solid #f0dca0;border-radius:6px;font-size:13px;color:#7a5c00;">
-        Skipped this run: {names}. Check the Actions log for details.
-      </div>
+        <div style="margin:20px 0 0 0;padding:12px 14px;background:{_WARN_BG};
+          border:1px solid {_WARN_BORDER};border-radius:6px;font-size:13px;
+          color:{_WARN_TEXT};">
+          Skipped this run: {names}. Check the Actions log for details.
+        </div>
         """
+
+    contents_line = ""
+    if topic_names:
+        contents_line = (
+            f'<div style="margin-top:16px;font-size:13px;color:{_TEXT_MUTED};">'
+            f'In today\'s digest: {html.escape(", ".join(topic_names))}</div>'
+        )
+
+    preheader = html.escape(_build_preheader(topic_results))
+    # Padding so Gmail/Outlook stop pulling trailing body text into the
+    # inbox preview once the real preheader text runs out.
+    preheader_pad = "&#8203;&nbsp;" * 120
 
     return f"""
     <html>
-    <body style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;max-width:640px;margin:0 auto;padding:20px;background:#fafafa;">
-      <h1 style="font-size:22px;margin-bottom:4px;">Your Daily Digest</h1>
-      <div style="color:#888;font-size:13px;margin-bottom:24px;">{html.escape(date_str)}</div>
-      {failure_notice}
-      {body}
-      <div style="margin-top:30px;padding-top:16px;border-top:1px solid #ddd;font-size:12px;color:#999;">
-        Generated automatically. Edit topics.json in your repo to customize topics and sources.
+    <head>
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1">
+      <meta name="color-scheme" content="light">
+      <meta name="supported-color-schemes" content="light">
+      <title>Your Daily Digest</title>
+    </head>
+    <body style="margin:0;padding:0;background:{_PAGE_BG};">
+      <div style="display:none;max-height:0;overflow:hidden;opacity:0;mso-hide:all;">
+        {preheader}{preheader_pad}
       </div>
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"
+        style="background:{_PAGE_BG};">
+        <tr>
+          <td align="center" style="padding:28px 12px;">
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"
+              style="width:100%;max-width:640px;">
+              <tr>
+                <td style="background:{_CARD_BG};border-radius:10px;padding:32px 28px;
+                  font-family:{_FONT_STACK};">
+                  <div style="font-size:23px;font-weight:700;color:{_TEXT_HEADING};
+                    letter-spacing:-0.01em;">Your Daily Digest</div>
+                  <div style="font-size:13px;color:{_TEXT_MUTED};margin-top:4px;">{html.escape(date_str)}</div>
+                  {contents_line}
+                  {failure_notice}
+                  {body}
+                  <div style="padding-top:22px;border-top:1px solid {_BORDER};
+                    font-size:12px;color:{_TEXT_MUTED};text-align:center;">
+                    Generated automatically. Edit topics.json in your repo to customize topics and sources.
+                  </div>
+                </td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+      </table>
     </body>
     </html>
     """
