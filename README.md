@@ -55,7 +55,7 @@ One digest run is a handful of requests (one per topic). Exact free-tier RPM/RPD
 numbers vary by model and project; check
 [AI Studio rate limits](https://aistudio.google.com/rate-limit) for yours. If a
 run returns `403 PERMISSION_DENIED`, look at the project status in AI Studio
-before assuming the code is broken; some accounts need phone/account
+before assuming the code is broken. Some accounts need phone or account
 verification first.
 
 ### 3. Gmail App Password
@@ -145,8 +145,8 @@ purpose, including the old Reuters and AP public RSS URLs, the WSJ feeds at
 `feeds.a.dj.com` (stopped publishing in early 2025), and the UN and WHO news
 feeds (both effectively abandoned, with no new items in months to years). All
 feed URLs were spot-checked for a live, recently-updated response before
-being added; if one goes stale later, `found 0 raw articles` in the Actions
-log for that topic over several days running is the tell.
+being added. If one goes stale later, watch for `found 0 raw articles` in
+that topic's Actions log across several days in a row.
 
 ---
 
@@ -198,7 +198,7 @@ Keep keys out of the repo. Put them in Actions secrets only.
 
 Forking publicly exposes `topics.json` (your source list). Secrets stay private.
 
-A Gmail App Password is scoped to SMTP for that app label; revoke it anytime
+A Gmail App Password is scoped to SMTP for that app label. Revoke it anytime
 from your Google Account without changing your main password.
 
 ## License

@@ -1,9 +1,9 @@
 name: Keepalive
 
 # GitHub disables scheduled workflows on a public repo after 60 days with
-# no repository activity (a push, release, or merged PR; workflow runs
-# themselves don't count). This makes a trivial empty commit well inside
-# that window so the daily digest schedule never goes idle on its own.
+# no repository activity (a push, release, or merged PR). Workflow runs on
+# their own don't count toward that. This step makes a trivial empty commit
+# well inside that window, so the daily digest schedule never goes idle.
 on:
   schedule:
     - cron: "0 0 1 * *"   # 00:00 UTC on the 1st of every month

@@ -2,11 +2,11 @@ name: Daily News Digest
 
 on:
   schedule:
-    # 8:00 AM Australia/Sydney every day. GitHub Actions cron is UTC by
-    # default; the timezone field (IANA) keeps wall-clock 8 AM through both
-    # AEST (UTC+10) and AEDT (UTC+11) without a manual twice-yearly nudge.
-    # Avoid exact top-of-hour load spikes when possible: :00 is fine here
-    # because the workflow is short and low traffic.
+    # 8:00 AM Australia/Sydney every day. GitHub Actions cron runs in UTC
+    # by default. The timezone field below is an IANA zone, so GitHub keeps
+    # the wall-clock time at 8 AM through the AEST/AEDT switch on its own.
+    # Running exactly on the hour would normally risk load spikes, but this
+    # workflow is short and low traffic, so :00 is fine here.
     - cron: "0 8 * * *"
       timezone: "Australia/Sydney"
   workflow_dispatch: {}   # manual run from the Actions tab
@@ -14,10 +14,10 @@ on:
 jobs:
   send-digest:
     runs-on: ubuntu-latest
-    # Upper bound on a run. A single unresponsive feed host can only stall
-    # so far (see fetch_feed()'s timeout handling in digest.py); this is a
-    # backstop so a stuck run doesn't silently eat the default 360-minute
-    # job cap and skip the day's email.
+    # Upper bound on a run. fetch_feed() in digest.py already bounds a
+    # single unresponsive feed host. This is a backstop against the default
+    # 360-minute job cap, so a stuck run can't quietly eat the whole day
+    # and skip the email.
     timeout-minutes: 15
     steps:
       - name: Check out repo

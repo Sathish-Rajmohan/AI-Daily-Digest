@@ -89,8 +89,8 @@ def fetch_feed(feed_url):
         resp.raise_for_status()
         return feedparser.parse(resp.content)
     except requests.exceptions.RequestException as e:
-        # Fall back to feedparser's own fetch; some hosts dislike
-        # non-browser clients and only respond to its defaults.
+        # Some hosts dislike non-browser clients and only respond to
+        # feedparser's own defaults. Fall back to that.
         print(f"  [warn] HTTP fetch failed for {feed_url}: {e}; trying feedparser", file=sys.stderr)
         return feedparser.parse(feed_url)
 
@@ -115,8 +115,8 @@ def fetch_topic_articles(topic, lookback_hours):
 
         for entry in parsed.entries:
             pub_time = parse_entry_time(entry)
-            # Keep undated items rather than silently dropping them;
-            # some feeds omit dates on otherwise useful posts.
+            # Some feeds omit dates on posts that are otherwise fine to
+            # use, so undated items are kept instead of dropped.
             if pub_time is not None and pub_time < cutoff:
                 continue
 
@@ -151,12 +151,12 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-flash-latest")
 GEMINI_MAX_RETRIES = 3
 
-# Persona + standing rules live in systemInstruction rather than the user
-# turn: Gemini processes it before the request content and it doesn't have
-# to compete with the (potentially large) article list for attention. Rules
-# are stated as literal, numbered constraints rather than vague guidance
-# ("at most N developments", not "keep it short") since Gemini follows
-# concrete constraints far more reliably than soft ones.
+# Persona and standing rules live in systemInstruction, not the user turn.
+# Gemini processes system instructions before the request content, so they
+# don't compete with the article list for attention. The rules below are
+# literal numbered constraints ("at most N developments") instead of vague
+# guidance ("keep it short"), since Gemini follows concrete limits more
+# reliably.
 SYSTEM_INSTRUCTION = """You are a careful, neutral news editor producing one \
 synthesized briefing per topic for a personal daily digest. Each request \
 gives you a numbered list of recent articles, possibly from several \
@@ -256,11 +256,10 @@ def summarize_topic_with_gemini(topic_name, articles, max_developments):
     if not articles:
         return None
 
-    # 1-indexed so the model's article_id citations map straight back to
-    # this dict without an off-by-one; only what's needed to pick and write
-    # about a story goes to the model, and never the link itself, so there's
-    # nothing for it to mistype or invent - the real link is substituted
-    # back in from `by_id` once Gemini has answered.
+    # 1-indexed so article_id in the model's response maps straight back to
+    # this dict. The model only ever sees id, title, outlet, and snippet,
+    # never the link, so there's nothing for it to mistype or invent. The
+    # real link comes back from `by_id` once Gemini has answered.
     by_id = {i: a for i, a in enumerate(articles, start=1)}
     numbered = [
         {
@@ -272,9 +271,10 @@ def summarize_topic_with_gemini(topic_name, articles, max_developments):
         for i, a in by_id.items()
     ]
 
-    # Long data block first, short instruction with an anchor phrase last:
-    # Gemini attends to instructions placed right after a large context
-    # block more reliably than ones stated before it.
+    # The article list comes first, and the instruction comes last with an
+    # anchor phrase pointing back at it. Gemini follows an instruction
+    # placed right after a large data block more reliably than one stated
+    # before it.
     prompt = f"""Numbered articles for the topic "{topic_name}", most recent first:
 
 {json.dumps(numbered, ensure_ascii=False)}
@@ -370,8 +370,8 @@ numeric id.
         print(f"  raw text: {text[:500]}", file=sys.stderr)
         return None
 
-    # Older prompts returned a list of stories; refuse that shape so we never
-    # accidentally email multiple per-topic summaries again.
+    # An earlier version of the prompt returned a list of stories. Refuse
+    # that shape so a list never gets emailed as separate summaries again.
     if isinstance(brief, list):
         print(
             f"  [warn] Gemini returned a list for {topic_name}; expected one briefing object",
@@ -382,9 +382,9 @@ numeric id.
         print(f"  [warn] Gemini returned non-object JSON for {topic_name}", file=sys.stderr)
         return None
 
-    # Resolve cited article_ids back to the real article we fetched, rather
-    # than trusting any title/link/outlet text Gemini might return - this is
-    # what actually guarantees every link in the email is a real, live one.
+    # Cited article_ids resolve back to the article we actually fetched.
+    # None of the title, link, or outlet in the email comes from Gemini's
+    # own output, so a mistyped or invented link can't reach the inbox.
     sources_in = brief.get("sources") or []
     sources = []
     seen_ids = set()
@@ -494,8 +494,8 @@ def build_html(topic_results, date_str):
 
 def send_email(subject, html_body):
     sender = os.environ["GMAIL_ADDRESS"].strip()
-    # App passwords are often copied with spaces; Gmail accepts them either way,
-    # but stripping avoids accidental paste issues.
+    # App passwords are often copied with spaces. Gmail accepts them either
+    # way, but stripping avoids paste mistakes.
     app_password = os.environ["GMAIL_APP_PASSWORD"].replace(" ", "")
     recipient = os.environ.get("RECIPIENT_EMAIL", sender).strip() or sender
 
