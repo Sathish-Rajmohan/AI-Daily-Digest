@@ -3,8 +3,8 @@
 Daily News Digest
 
 Reads topics.json, pulls recent items from each topic's RSS feeds,
-asks Gemini to pick and summarize the top stories per topic, and
-emails an HTML digest via Gmail SMTP.
+asks Gemini to write one synthesized brief per topic (using multiple
+outlets to fill in the picture), and emails an HTML digest via Gmail SMTP.
 
 Config lives in topics.json and environment variables (see README.md).
 """
@@ -82,7 +82,7 @@ def fetch_feed(feed_url):
         resp.raise_for_status()
         return feedparser.parse(resp.content)
     except requests.exceptions.RequestException as e:
-        # Fall back to feedparser's own fetch — some hosts dislike
+        # Fall back to feedparser's own fetch; some hosts dislike
         # non-browser clients and only respond to its defaults.
         print(f"  [warn] HTTP fetch failed for {feed_url}: {e}; trying feedparser", file=sys.stderr)
         return feedparser.parse(feed_url)
@@ -108,7 +108,7 @@ def fetch_topic_articles(topic, lookback_hours):
 
         for entry in parsed.entries:
             pub_time = parse_entry_time(entry)
-            # Keep undated items rather than silently dropping them —
+            # Keep undated items rather than silently dropping them;
             # some feeds omit dates on otherwise useful posts.
             if pub_time is not None and pub_time < cutoff:
                 continue
@@ -144,28 +144,38 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-flash-latest")
 GEMINI_MAX_RETRIES = 3
 
-STORY_SCHEMA = {
-    "type": "ARRAY",
-    "items": {
-        "type": "OBJECT",
-        "properties": {
-            "title": {"type": "STRING"},
-            "summary": {"type": "STRING"},
-            "link": {"type": "STRING"},
-            "source": {"type": "STRING"},
+BRIEF_SCHEMA = {
+    "type": "OBJECT",
+    "properties": {
+        "headline": {"type": "STRING"},
+        "summary": {"type": "STRING"},
+        "sources": {
+            "type": "ARRAY",
+            "items": {
+                "type": "OBJECT",
+                "properties": {
+                    "title": {"type": "STRING"},
+                    "link": {"type": "STRING"},
+                    "outlet": {"type": "STRING"},
+                },
+                "required": ["title", "link", "outlet"],
+            },
         },
-        "required": ["title", "summary", "link", "source"],
     },
+    "required": ["headline", "summary", "sources"],
 }
 
 
-def summarize_topic_with_gemini(topic_name, articles, max_stories):
+def summarize_topic_with_gemini(topic_name, articles, max_developments):
     """
-    Ask Gemini to pick the top N distinct stories and summarize each.
-    Returns a list of dicts: {title, summary, link, source}
+    Ask Gemini for ONE briefing per topic.
+
+    Multiple outlets covering the same development should be fused into that
+    single narrative (not listed as separate summaries). Return shape:
+    {headline, summary, sources: [{title, link, outlet}, ...]} or None.
     """
     if not articles:
-        return []
+        return None
 
     trimmed = []
     for a in articles:
@@ -176,21 +186,34 @@ def summarize_topic_with_gemini(topic_name, articles, max_stories):
             "snippet": (a["summary"] or "")[:500],
         })
 
-    prompt = f"""You are a careful news editor. Below is a JSON list of recent articles
-related to the topic "{topic_name}", pulled from RSS feeds in the lookback window.
+    prompt = f"""You are a careful news editor writing a daily briefing section
+for the topic "{topic_name}". Below is a JSON list of recent articles from
+several outlets in the lookback window.
 
-Your job:
-1. Identify the top {max_stories} most significant, distinct stories or developments.
-   Merge duplicate coverage of the same story from different outlets into ONE entry,
-   and pick the best/original source link for it.
-2. Write a neutral, factual 2-3 sentence summary for each, based only on the
-   provided titles/snippets. Do not invent details not implied by the source text.
-3. Order them by significance, most important first.
+Hard rules:
+1. Produce exactly ONE briefing for this topic. Do not emit a list of
+   separate story summaries.
+2. Cluster coverage of the same event across outlets. When several feeds
+   report the same development, treat them as one thread and use their
+   combined detail to paint a fuller picture (who, what, where, stakes,
+   what happens next). Prefer corroboration over repeating the same lead.
+3. Inside that single briefing, cover at most the {max_developments} most
+   significant distinct developments. Weave them into one coherent
+   narrative (a few short paragraphs), not a bullet list of mini-stories.
+4. Stay neutral and factual. Use only information implied by the provided
+   titles/snippets. Do not invent quotes, numbers, or outcomes.
+5. In "sources", list the specific articles you relied on (typically 3-8),
+   preferring primary or clearer reporting when duplicates exist. Every
+   cited link must come from the article list below.
 
-Return ONLY valid JSON (no markdown fences, no preamble), as a list of objects:
-[
-  {{"title": "...", "summary": "...", "link": "...", "source": "..."}}
-]
+Return ONLY valid JSON matching:
+{{
+  "headline": "short section headline for the whole topic",
+  "summary": "multi-paragraph briefing that synthesizes the day for this topic",
+  "sources": [
+    {{"title": "...", "link": "...", "outlet": "..."}}
+  ]
+}}
 
 Articles:
 {json.dumps(trimmed, ensure_ascii=False)}
@@ -206,7 +229,7 @@ Articles:
         "generationConfig": {
             "temperature": 0.2,
             "responseMimeType": "application/json",
-            "responseSchema": STORY_SCHEMA,
+            "responseSchema": BRIEF_SCHEMA,
         },
     }
 
@@ -249,7 +272,7 @@ Articles:
             f"{GEMINI_MAX_RETRIES} attempts: {last_error}",
             file=sys.stderr,
         )
-        return []
+        return None
 
     # Blocked / empty candidates (safety filters, etc.)
     candidates = data.get("candidates") or []
@@ -259,14 +282,14 @@ Articles:
             f"  [warn] no candidates for {topic_name}; promptFeedback={feedback}",
             file=sys.stderr,
         )
-        return []
+        return None
 
     try:
         parts = candidates[0]["content"]["parts"]
         text = "".join(p.get("text", "") for p in parts).strip()
     except (KeyError, IndexError, TypeError) as e:
         print(f"  [warn] unexpected Gemini response shape for {topic_name}: {e}", file=sys.stderr)
-        return []
+        return None
 
     if text.startswith("```"):
         text = text.strip("`")
@@ -274,52 +297,99 @@ Articles:
             text = text[4:].lstrip()
 
     try:
-        stories = json.loads(text)
+        brief = json.loads(text)
     except json.JSONDecodeError as e:
         print(f"  [warn] could not parse Gemini JSON for {topic_name}: {e}", file=sys.stderr)
         print(f"  raw text: {text[:500]}", file=sys.stderr)
-        return []
+        return None
 
-    if not isinstance(stories, list):
-        print(f"  [warn] Gemini returned non-list JSON for {topic_name}", file=sys.stderr)
-        return []
+    # Older prompts returned a list of stories; refuse that shape so we never
+    # accidentally email multiple per-topic summaries again.
+    if isinstance(brief, list):
+        print(
+            f"  [warn] Gemini returned a list for {topic_name}; expected one briefing object",
+            file=sys.stderr,
+        )
+        return None
+    if not isinstance(brief, dict):
+        print(f"  [warn] Gemini returned non-object JSON for {topic_name}", file=sys.stderr)
+        return None
 
-    cleaned = []
-    for s in stories:
-        if not isinstance(s, dict):
-            continue
-        cleaned.append({
-            "title": str(s.get("title") or "(untitled)"),
-            "summary": str(s.get("summary") or ""),
-            "link": str(s.get("link") or "#"),
-            "source": str(s.get("source") or ""),
-        })
-    return cleaned[:max_stories]
+    sources_in = brief.get("sources") or []
+    sources = []
+    if isinstance(sources_in, list):
+        for s in sources_in:
+            if not isinstance(s, dict):
+                continue
+            link = str(s.get("link") or "").strip()
+            if not link:
+                continue
+            sources.append({
+                "title": str(s.get("title") or "(untitled)"),
+                "link": link,
+                "outlet": str(s.get("outlet") or s.get("source") or ""),
+            })
+
+    summary = str(brief.get("summary") or "").strip()
+    headline = str(brief.get("headline") or topic_name).strip()
+    if not summary:
+        print(f"  [warn] empty summary for {topic_name}", file=sys.stderr)
+        return None
+
+    return {
+        "headline": headline,
+        "summary": summary,
+        "sources": sources,
+    }
+
+
+def _summary_to_html(summary):
+    """Turn paragraph breaks in the briefing into HTML paragraphs."""
+    parts = [p.strip() for p in re.split(r"\n\s*\n", summary) if p.strip()]
+    if not parts:
+        parts = [summary.strip()]
+    return "".join(
+        f'<p style="font-size:14px;color:#333;line-height:1.55;margin:0 0 12px 0;">{html.escape(p)}</p>'
+        for p in parts
+    )
 
 
 def build_html(topic_results, date_str):
     sections = []
-    for topic_name, stories in topic_results:
-        if not stories:
+    for topic_name, brief in topic_results:
+        if not brief:
             continue
-        items_html = ""
-        for s in stories:
+
+        headline = html.escape(brief.get("headline") or topic_name)
+        summary_html = _summary_to_html(brief.get("summary") or "")
+
+        sources_html = ""
+        for s in brief.get("sources") or []:
             title = html.escape(s.get("title", "(untitled)"))
-            summary = html.escape(s.get("summary", ""))
             link = html.escape(s.get("link", "#"), quote=True)
-            source = html.escape(s.get("source", ""))
-            items_html += f"""
-            <div style="margin-bottom:18px;">
-              <a href="{link}" style="font-size:16px;font-weight:600;color:#1a1a1a;text-decoration:none;">{title}</a>
-              <div style="font-size:13px;color:#888;margin:2px 0 6px 0;">{source}</div>
-              <div style="font-size:14px;color:#333;line-height:1.5;">{summary}</div>
-              <a href="{link}" style="font-size:13px;color:#2563eb;">Read original &rarr;</a>
+            outlet = html.escape(s.get("outlet", ""))
+            outlet_bit = f" <span style=\"color:#888;\">({outlet})</span>" if outlet else ""
+            sources_html += (
+                f'<li style="margin:0 0 6px 0;">'
+                f'<a href="{link}" style="color:#2563eb;text-decoration:none;">{title}</a>'
+                f"{outlet_bit}</li>"
+            )
+
+        sources_block = ""
+        if sources_html:
+            sources_block = f"""
+            <div style="margin-top:14px;">
+              <div style="font-size:12px;letter-spacing:0.04em;text-transform:uppercase;color:#888;margin-bottom:6px;">Sources</div>
+              <ul style="margin:0;padding-left:18px;font-size:13px;line-height:1.4;">{sources_html}</ul>
             </div>
             """
+
         sections.append(f"""
-        <div style="margin-bottom:30px;">
-          <h2 style="font-size:19px;border-bottom:2px solid #1a1a1a;padding-bottom:6px;">{html.escape(topic_name)}</h2>
-          {items_html}
+        <div style="margin-bottom:34px;">
+          <h2 style="font-size:19px;border-bottom:2px solid #1a1a1a;padding-bottom:6px;margin-bottom:8px;">{html.escape(topic_name)}</h2>
+          <div style="font-size:15px;font-weight:600;color:#1a1a1a;margin:0 0 10px 0;">{headline}</div>
+          {summary_html}
+          {sources_block}
         </div>
         """)
 
@@ -387,34 +457,39 @@ def main():
     topic_results = []
     for topic in config["topics"]:
         name = topic.get("name") or "Untitled"
-        max_stories = topic.get("max_stories", 5)
+        # How many distinct developments to fold into the single topic brief.
+        max_developments = topic.get("max_stories", 5)
         print(f"Fetching articles for topic: {name}")
         try:
             articles = fetch_topic_articles(topic, lookback_hours)
         except Exception as e:
             print(f"  [error] fetch failed for '{name}': {e}", file=sys.stderr)
-            topic_results.append((name, []))
+            topic_results.append((name, None))
             continue
 
         print(f"  found {len(articles)} raw articles (capped at {MAX_ARTICLES_PER_TOPIC})")
 
         if not articles:
-            topic_results.append((name, []))
+            topic_results.append((name, None))
             continue
 
-        print(f"  summarizing with {GEMINI_MODEL}...")
+        print(f"  writing one synthesized brief with {GEMINI_MODEL}...")
         try:
-            stories = summarize_topic_with_gemini(name, articles, max_stories)
+            brief = summarize_topic_with_gemini(name, articles, max_developments)
         except Exception as e:
             print(f"  [error] summarize failed for '{name}': {e}", file=sys.stderr)
-            stories = []
-        print(f"  got {len(stories)} summarized stories")
-        topic_results.append((name, stories))
+            brief = None
+        if brief:
+            n_sources = len(brief.get("sources") or [])
+            print(f"  got briefing with {n_sources} cited sources")
+        else:
+            print("  got no briefing")
+        topic_results.append((name, brief))
 
         # Be gentle on free-tier rate limits across topics.
         time.sleep(2)
 
-    if not any(stories for _, stories in topic_results):
+    if not any(brief for _, brief in topic_results):
         print(
             "WARNING: every topic came back empty. Still sending a stub email "
             "so you notice the run happened.",
@@ -424,7 +499,7 @@ def main():
     now_local = datetime.now(local_tz)
     date_str = now_local.strftime("%A, %d %B %Y")
     html_body = build_html(topic_results, date_str)
-    subject = f"{subject_prefix} — {date_str}"
+    subject = f"{subject_prefix} - {date_str}"
 
     print("Sending email...")
     try:

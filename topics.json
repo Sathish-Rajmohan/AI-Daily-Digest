@@ -1,5 +1,5 @@
 {
-  "_comment": "Edit this file to add or remove topics. Each topic needs a name and a list of RSS feed URLs. To remove a topic, delete its whole block. To add one, copy a block and change the name + feeds.",
+  "_comment": "Edit this file to add or remove topics. Each topic needs a name and a list of RSS feed URLs. max_stories caps how many distinct developments get woven into that topic's single daily brief (not separate per-story summaries). To remove a topic, delete its whole block. To add one, copy a block and change the name + feeds.",
 
   "topics": [
     {

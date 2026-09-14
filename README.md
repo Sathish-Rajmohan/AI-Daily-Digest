@@ -1,21 +1,15 @@
 # Daily News Digest
 
-**A free, fully automated daily email digest — built on GitHub Actions, RSS, and an LLM. No server, no hosting bill, no subscription.**
-
-Every morning, this project pulls the latest stories from RSS feeds you choose, has an LLM pick the most significant ones per topic, writes short neutral summaries, and emails you an HTML digest with a link back to the original article for every story. Topics and sources are fully configurable through one JSON file — no code changes needed to add, remove, or retune what you follow.
-
-> Fork this repo, plug in your own topics and two free API keys, and you have your own personal news briefing running forever at **$0/month**.
-
----
-
-## How it works
+GitHub Actions cron job that pulls RSS feeds you configure, asks Gemini to
+write one synthesized brief per topic (drawing on several outlets so the same
+story isn't repeated), and emails you the HTML digest. No server to babysit.
 
 ```
 GitHub Actions (daily)
   → digest.py
       → topics.json
       → RSS feeds
-      → Gemini (rank + summarize)
+      → Gemini (one brief per topic, multi-source)
       → Gmail SMTP
 ```
 
@@ -23,10 +17,12 @@ GitHub Actions (daily)
 |---|---|---|
 | GitHub Actions | Runs the script on a schedule | Free on public repos (private repos use your included Actions minutes) |
 | RSS feeds | Article titles, snippets, and canonical URLs | Free |
-| Gemini API | Dedupes, ranks, and summarizes per topic | Free tier (check your project's limits in AI Studio) |
+| Gemini API | One multi-source briefing per topic | Free tier (check your project's limits in AI Studio) |
 | Gmail SMTP | Sends the email | Free |
 
-Every story in the digest links straight back to its original publisher, so anything the summary says is one click away from being checked against the source.
+Each topic section is a single narrative, not a stack of near-duplicate story
+cards. Sources used for that brief are listed underneath with links back to
+the publishers.
 
 ---
 
@@ -56,7 +52,7 @@ Flash model, so you don't have to chase dated model IDs when Google rotates
 them. Pin a specific ID with the `GEMINI_MODEL` env var if you want.
 
 One digest run is a handful of requests (one per topic). Exact free-tier RPM/RPD
-numbers vary by model and project — check
+numbers vary by model and project; check
 [AI Studio rate limits](https://aistudio.google.com/rate-limit) for yours. If a
 run returns `403 PERMISSION_DENIED`, look at the project status in AI Studio
 before assuming the code is broken; some accounts need phone/account
@@ -77,7 +73,7 @@ You need 2-Step Verification on.
 4. Copy the 16-character password.
 
 If the App Passwords page says it's not available, you're usually on a
-Workspace account, Advanced Protection, or security-key-only 2SV — use a
+Workspace account, Advanced Protection, or security-key-only 2SV. Use a
 personal Google account with phone/authenticator 2SV instead.
 
 ### 4. Repo secrets
@@ -120,8 +116,9 @@ Edit `topics.json`. No code changes needed.
 }
 ```
 
-Add a topic by copying a block. Delete a block to drop one. Tweak `max_stories`
-or the `feeds` array as you like. Push and the next run picks it up.
+Add a topic by copying a block. Delete a block to drop one. `max_stories` caps
+how many distinct developments get folded into that topic's single brief (it
+is not "emit N separate summaries"). Push and the next run picks it up.
 
 `settings.lookback_hours` controls how far back feeds are scanned. Default is
 `24` so an 8 AM Sydney run covers the previous day without dragging in a lot of
@@ -134,7 +131,7 @@ Search `"site name" RSS feed`, or try `/rss`, `/feed`, `/rss.xml` on the domain.
 A browser showing XML with `<item>` or `<entry>` tags means you're good.
 
 The stock config covers Tech & AI, International News, Geopolitics & Security,
-Science & Health, and Markets & Business — BBC, Guardian, NYT, FT, WSJ, NPR,
+Science & Health, and Markets & Business: BBC, Guardian, NYT, FT, WSJ, NPR,
 Al Jazeera, ABC Australia, SCMP, Foreign Policy, Foreign Affairs, Defense One,
 Nature, WHO, Bloomberg, and a few others. Dead or blocked feeds (notably the
 old Reuters and AP public RSS URLs) were left out on purpose.
@@ -159,25 +156,26 @@ for you. Change the hour (or the timezone) there if you want a different slot.
 
 All Gemini traffic goes through `summarize_topic_with_gemini()` in `digest.py`.
 Rewrite that function for Claude, OpenAI, Groq, etc., keep the same return
-shape (`[{title, summary, link, source}, ...]`), and leave the rest alone.
+shape (`{headline, summary, sources: [{title, link, outlet}, ...]}` or `None`),
+and leave the rest alone.
 
 ---
 
 ## Troubleshooting
 
-**No email** — start with the Actions log. Bad keys, App Password mistakes, and
+**No email:** start with the Actions log. Bad keys, App Password mistakes, and
 SMTP auth failures show up there.
 
-**Empty topic** — look for `found 0 raw articles`. Feed URL is probably dead;
+**Empty topic:** look for `found 0 raw articles`. Feed URL is probably dead;
 open it in a browser.
 
-**Gmail login rejected** — use an App Password, not your normal password, and
+**Gmail login rejected:** use an App Password, not your normal password, and
 confirm 2-Step Verification is on.
 
-**Gemini 429** — the script backs off and retries. With many topics, raise the
+**Gemini 429:** the script backs off and retries. With many topics, raise the
 `time.sleep(2)` between topics in `digest.py`.
 
-**Gemini 403** — account/project issue in AI Studio more often than a code bug.
+**Gemini 403:** account/project issue in AI Studio more often than a code bug.
 Check [aistudio.google.com/app/apikey](https://aistudio.google.com/app/apikey).
 
 ---
@@ -197,5 +195,5 @@ from your Google Account without changing your main password.
 
 ## Contributing
 
-Issues and PRs welcome — more topic presets, other LLM backends, Slack/Discord
+Issues and PRs welcome: more topic presets, other LLM backends, Slack/Discord
 delivery, whatever fits.
