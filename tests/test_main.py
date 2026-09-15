@@ -377,3 +377,138 @@ def test_full_run_during_a_total_model_outage(write_config, mail_env, feeds, tra
     assert "No summary was available for this topic" in body
     assert 'href="https://a.example/1"' in body
     assert "One thing worth knowing" not in body
+
+
+# --------------------------------------------------------------------------
+# The run as a whole, at its edges
+# --------------------------------------------------------------------------
+
+BRIEF_REPLY = {"stories": [{"article_ids": [1], "subheading": "One story", "detail": "It happened."}],
+               "overview": "A quiet day."}
+
+
+def serve_one_topic(feeds, write_config, **settings):
+    feeds.serve("https://a.example/rss", rss(
+        {"title": "A fresh", "link": "https://a.example/1", "pubDate": ago(1)}, title="Outlet A"))
+    write_config(config({"name": "World", "feeds": ["https://a.example/rss"]}, **settings))
+
+
+def test_full_run_on_groq_alone(write_config, mail_env, feeds, transport, smtp, with_groq, monkeypatch):
+    from conftest import groq_reply
+    monkeypatch.setattr(digest, "GEMINI_API_KEY", None)
+    serve_one_topic(feeds, write_config)
+    transport.script("groq-a", groq_reply(BRIEF_REPLY), groq_reply(SAMPLE_FACT))
+    digest.main()
+    _, body = html_of(smtp)
+    assert "One story" in body and SAMPLE_FACT["fact"] in body
+    assert set(transport.tried) == {"groq/groq-a"}
+
+
+def test_full_run_sent_to_yourself_with_an_emoji_subject(write_config, mail_env, feeds, transport, smtp,
+                                                         monkeypatch, capsys):
+    from email.header import decode_header, make_header
+    monkeypatch.setenv("RECIPIENT_EMAIL", "sender@example.com")
+    serve_one_topic(feeds, write_config, email_subject_prefix="📰 Morning")
+    transport.script("gem-a", gemini_reply(BRIEF_REPLY), gemini_reply(SAMPLE_FACT))
+    digest.main()
+    msg, body = html_of(smtp)
+    assert str(make_header(decode_header(msg["Subject"]))).startswith("📰 Morning - ")
+    assert [p.get_content_type() for p in msg.get_payload()] == ["text/html"]
+    assert "different address" in capsys.readouterr().err
+    assert "One story" in body
+
+
+def test_a_rejected_gmail_login_exits_non_zero(write_config, mail_env, fake_pipeline, monkeypatch, capsys):
+    class RefusingSMTP:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def login(self, user, password):
+            raise digest.smtplib.SMTPAuthenticationError(535, b"5.7.8 Username and Password not accepted")
+
+    monkeypatch.setattr(digest.smtplib, "SMTP_SSL", RefusingSMTP)
+    write_config(config(topic("Tech")))
+    with pytest.raises(SystemExit) as exit_info:
+        digest.main()
+    assert exit_info.value.code == 1
+    assert "Username and Password not accepted" in capsys.readouterr().err
+
+
+# A broad outage is where a run could hang until the workflow timeout kills it
+# and sends nothing. The shared budget has to end it quickly instead, with
+# every topic still in the email as headlines.
+def test_a_broad_outage_ends_within_the_budget_and_still_sends_every_topic(
+        write_config, mail_env, sent, transport, clock, no_jitter, monkeypatch, capsys):
+    monkeypatch.setattr(digest, "TOTAL_BUDGET", 30)
+    monkeypatch.setattr(digest, "fetch_topic_articles", lambda topic_cfg, lookback: make_articles(3))
+    transport.script("gem-a", status(503))
+    transport.script("gem-b", status(503))
+    write_config(config(topic("One"), topic("Two"), topic("Three"), topic("Four")))
+    digest.main()
+    [(_, body)] = sent
+    assert body.count("No summary was available for this topic") == 4
+    assert clock.now - 1000.0 <= digest.TOTAL_BUDGET + 2 * 4
+    assert "out of time budget" in capsys.readouterr().err
+
+
+class FixedDateTime(datetime):
+    moment = datetime(2026, 9, 15, 22, 30, tzinfo=timezone.utc)
+
+    @classmethod
+    def now(cls, tz=None):
+        return cls.moment.astimezone(tz) if tz else cls.moment.replace(tzinfo=None)
+
+
+# The scheduled run fires at 22:30 UTC, which is already the next morning in
+# Sydney. The subject, the email and the fact's rotation all have to follow
+# the reader's date, not UTC's.
+def test_the_date_is_the_readers_local_date_not_utc(write_config, mail_env, sent, fake_pipeline, monkeypatch):
+    from datetime import date
+    monkeypatch.setattr(digest, "datetime", FixedDateTime)
+    write_config(config(topic("Tech"), timezone="Australia/Sydney", email_subject_prefix="Digest"))
+    digest.main()
+    [(subject, body)] = sent
+    assert subject == "Digest - Wednesday, 16 September 2026"
+    assert "Wednesday, 16 September 2026" in body
+    [(_, day)] = [e for e in fake_pipeline.events if e[0] == "fact"]
+    assert day == date(2026, 9, 16)
+
+
+def test_an_email_near_gmails_clip_limit_is_flagged_and_still_sent(write_config, mail_env, sent,
+                                                                  fake_pipeline, monkeypatch, capsys):
+    monkeypatch.setattr(digest, "GMAIL_WARN_BYTES", 1000)
+    write_config(config(topic("Tech")))
+    digest.main()
+    assert len(sent) == 1
+    captured = capsys.readouterr()
+    assert "approaching Gmail's ~102KB limit" in captured.err
+    assert "of Gmail's clipping limit" in captured.out
+
+
+def test_a_briefing_with_nothing_to_measure_skips_the_readability_line(write_config, mail_env, sent,
+                                                                       fake_pipeline, capsys):
+    fake_pipeline.summaries = {"Tech": {"overview": "", "stories": [
+        {"subheading": "Only a heading", "detail": "", "sources": []}]}}
+    write_config(config(topic("Tech")))
+    digest.main()
+    out = capsys.readouterr().out
+    assert "got 1 stories citing 0 sources" in out
+    assert "average sentence length" not in out
+    assert "Only a heading" in sent[0][1]
+
+
+def test_a_topic_with_neither_briefing_nor_headlines_is_reported_as_skipped(write_config, mail_env, sent,
+                                                                            fake_pipeline, monkeypatch):
+    fake_pipeline.summaries = {"Tech": None}
+    monkeypatch.setattr(digest, "headlines_only_brief", lambda articles, n: None)
+    write_config(config(topic("Tech"), topic("World")))
+    digest.main()
+    [(_, body)] = sent
+    assert "Skipped this run: Tech." in body
+    assert "World overview." in body

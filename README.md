@@ -179,6 +179,22 @@ that are already known dead so you don't waste time on them.
 Adding feeds is cheap: articles are taken from each feed in turn, so a new
 feed takes a share of the slots rather than a busy one taking over.
 
+**How many topics?** As many as you like. Fair warning, though: Gmail only
+shows about the first 102KB of an email and hides the rest behind a
+"[Message clipped] View entire message" link. Nothing is lost, it just takes
+an extra tap to read the end. The five topics that ship stay under that
+limit. Somewhere around eight topics at six stories each, a busy day will
+start getting clipped. If that bothers you:
+
+- lower `max_stories` on some topics,
+- set `collapsible_stories` to `false`, since the folding version is a little
+  larger, or
+- split your topics across two workflows, each with its own `topics.json`.
+
+Every run prints how much of the limit that day's email used, and warns once
+it gets close. Other mail apps don't clip. The numbers are in [how long the
+email can get](HOW-IT-WORKS.md#how-long-the-email-can-get).
+
 ### Settings
 
 ```json
@@ -271,9 +287,11 @@ down](HOW-IT-WORKS.md#what-happens-when-a-model-is-down).
 **Everything failing at once:** each topic falls back to a plain list of
 headlines rather than disappearing, and the email still goes out.
 
-**`[Message clipped]` in Gmail:** the email passed ~102KB. Lower
-`max_stories`. See [how long the email can
-get](HOW-IT-WORKS.md#how-long-the-email-can-get).
+**`[Message clipped]` in Gmail:** the email passed ~102KB. Tap "View entire
+message" to read the rest. To stop it happening, lower `max_stories`, turn
+off `collapsible_stories`, or split topics across two workflows (see [how
+many topics](#topics-and-feeds)). The log line `Email is NKB (N% of Gmail's
+clipping limit)` shows how close each run got.
 
 **Prose feels dense:** each run logs its average sentence length per topic.
 Above 22 words means the instruction isn't landing; see [how the writing is
