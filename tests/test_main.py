@@ -115,9 +115,8 @@ def test_no_provider_key_exits(write_config, mail_env, sent, fake_pipeline, monk
     assert fake_pipeline.events == []
 
 
-# A key with an emptied model list used to get past the key check, fetch
-# every feed, and then crash with an IndexError on the first topic that had
-# articles, before any email could go out.
+# A key with an empty model list should stop the run before any feed is
+# fetched.
 def test_a_key_with_no_models_exits_cleanly(write_config, mail_env, sent, fake_pipeline, monkeypatch,
                                             with_groq, capsys):
     write_config(config(topic("Tech")))
@@ -148,7 +147,7 @@ def test_happy_path(write_config, mail_env, sent, fake_pipeline):
     [(subject, body)] = sent
     assert re.fullmatch(r"My Digest - \w+day, \d{2} \w+ \d{4}", subject)
     assert "Tech overview." in body and "World lead story" in body
-    assert "One thing worth knowing" in body and "A fact." in body
+    assert "Fact of the day" in body and "A fact." in body
     assert "Skipped this run" not in body
 
 
@@ -226,9 +225,8 @@ def test_topic_with_no_new_articles_is_left_out_quietly(write_config, mail_env, 
     assert ("summarize", "Quiet", 5) not in fake_pipeline.events
 
 
-# The headline fallback is the path for a day when no model answers. main()
-# read a "sources" key the fallback brief doesn't have, so the exact outage
-# it exists for crashed the run and no email went out at all.
+# The headline fallback is for days when no model answers, so the email
+# still has to go out.
 @pytest.mark.parametrize("failure", [None, RuntimeError("unexpected")])
 def test_no_briefing_falls_back_to_headlines(write_config, mail_env, sent, fake_pipeline, capsys, failure):
     fake_pipeline.summaries = {"World": failure}
@@ -245,7 +243,7 @@ def test_fact_disabled_is_never_requested(write_config, mail_env, sent, fake_pip
     write_config(config(topic("Tech"), fact_of_the_day=False))
     digest.main()
     assert not any(e[0] == "fact" for e in fake_pipeline.events)
-    assert "One thing worth knowing" not in sent[0][1]
+    assert "Fact of the day" not in sent[0][1]
 
 
 @pytest.mark.parametrize("outcome", [None, RuntimeError("fact exploded")])
@@ -254,7 +252,7 @@ def test_fact_failure_leaves_the_block_out(write_config, mail_env, sent, fake_pi
     write_config(config(topic("Tech")))
     digest.main()
     [(_, body)] = sent
-    assert "One thing worth knowing" not in body
+    assert "Fact of the day" not in body
     assert "Tech overview." in body
 
 
@@ -376,7 +374,7 @@ def test_full_run_during_a_total_model_outage(write_config, mail_env, feeds, tra
     _, body = html_of(smtp)
     assert "No summary was available for this topic" in body
     assert 'href="https://a.example/1"' in body
-    assert "One thing worth knowing" not in body
+    assert "Fact of the day" not in body
 
 
 # --------------------------------------------------------------------------
@@ -440,9 +438,8 @@ def test_a_rejected_gmail_login_exits_non_zero(write_config, mail_env, fake_pipe
     assert "Username and Password not accepted" in capsys.readouterr().err
 
 
-# A broad outage is where a run could hang until the workflow timeout kills it
-# and sends nothing. The shared budget has to end it quickly instead, with
-# every topic still in the email as headlines.
+# A broad outage should end within the shared budget and still send every
+# topic as headlines.
 def test_a_broad_outage_ends_within_the_budget_and_still_sends_every_topic(
         write_config, mail_env, sent, transport, clock, no_jitter, monkeypatch, capsys):
     monkeypatch.setattr(digest, "TOTAL_BUDGET", 30)
@@ -465,9 +462,8 @@ class FixedDateTime(datetime):
         return cls.moment.astimezone(tz) if tz else cls.moment.replace(tzinfo=None)
 
 
-# The scheduled run fires at 22:30 UTC, which is already the next morning in
-# Sydney. The subject, the email and the fact's rotation all have to follow
-# the reader's date, not UTC's.
+# The scheduled run fires at 22:30 UTC, already the next morning in Sydney,
+# so dates must follow the configured time zone.
 def test_the_date_is_the_readers_local_date_not_utc(write_config, mail_env, sent, fake_pipeline, monkeypatch):
     from datetime import date
     monkeypatch.setattr(digest, "datetime", FixedDateTime)

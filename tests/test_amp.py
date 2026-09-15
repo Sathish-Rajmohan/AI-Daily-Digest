@@ -164,8 +164,8 @@ def test_each_topic_gets_its_own_accordion():
     assert out.count('<amp-accordion class="stories">') == 2
 
 
-# The component docs list these, but the AMP4EMAIL validator rejects them,
-# and Gmail drops to the full version if the AMP copy fails validation.
+# amp-accordion's docs list these attributes, but the AMP4EMAIL validator
+# rejects them.
 @pytest.mark.parametrize("attribute", ["disable-session-states", "expand-single-section", "animate"])
 def test_attributes_the_email_validator_rejects_are_not_used(attribute):
     out = digest.build_amp([("Tech", brief(), None)], DATE)
@@ -285,7 +285,7 @@ def test_no_strip_or_index_when_nothing_to_show():
 
 def test_no_fact_no_fact_block():
     out = digest.build_amp([("Tech", brief(), None)], DATE)
-    assert "One thing worth knowing" not in out
+    assert "Fact of the day" not in out
 
 
 def test_fact_without_why():

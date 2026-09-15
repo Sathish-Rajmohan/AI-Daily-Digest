@@ -317,9 +317,8 @@ def test_budget_running_out_mid_backoff_stops_retrying(transport, clock, no_jitt
     assert clock.sleeps == [4.0, 1.0]
 
 
-# A 200 whose body isn't the provider's JSON (a captive portal, a proxy error
-# page, an API change) used to raise straight out of the chain, so the topic
-# failed without the remaining models ever being asked.
+# A 200 whose body isn't the provider's JSON, like a proxy's error page,
+# counts as no answer.
 @pytest.mark.parametrize("response", [
     FakeResponse(200, None, text="<html>Service temporarily unavailable</html>"),
     FakeResponse(200, []),
@@ -413,10 +412,7 @@ def test_empty_reply_moves_on_to_the_next_model(transport):
     assert transport.tried == ["gemini/gem-a", "gemini/gem-b"]
 
 
-# Truncation mid-JSON is how these models fail structured output. The chain
-# used to stop at the first model that returned any text at all, so a
-# truncated reply from the head model sank the topic even with healthy
-# models further down.
+# A reply cut off mid-JSON should fall through to the next model.
 def test_unparseable_json_moves_on_to_the_next_model(transport, capsys):
     transport.script("gem-a", gemini_reply('{"stories": [{"subheading": "Cut off mid'))
     transport.script("gem-b", gemini_reply(OK))

@@ -89,10 +89,7 @@ def test_unicode_is_sent_unescaped(transport):
     assert "Élection à Montréal" in transport.prompt()
 
 
-# The article list is fenced in a tag so the model can tell data from
-# instructions. Titles and snippets come from feeds, so one containing the
-# closing tag could end the fence early and have whatever followed read as
-# instructions.
+# Feed text containing the closing tag mustn't end the article list early.
 def test_feed_text_cannot_close_the_article_fence(transport):
     transport.script("gem-a", gemini_reply(SAMPLE_BRIEF))
     articles = make_articles(2)
@@ -232,8 +229,7 @@ def test_non_list_ids_give_no_sources(ids):
     (None, []),
     ("three", []),
     ("2.7", []),
-    # A fractional id used to be truncated to a real one, citing an article
-    # the model never pointed at. A boolean used to be read as 1 or 0.
+    # int() would turn these into a real id the model never cited.
     (2.7, []),
     (True, []),
     (False, []),
@@ -420,7 +416,7 @@ def test_schemas_order_citations_before_prose_and_stories_before_overview():
 
 
 # --------------------------------------------------------------------------
-# The fact prompt: simple enough to follow on the first read
+# The fact prompt
 # --------------------------------------------------------------------------
 
 def _syllables(word):

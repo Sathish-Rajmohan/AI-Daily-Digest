@@ -70,10 +70,8 @@ def test_absurd_year_does_not_raise():
     digest.parse_entry_time({"published": "Tue, 15 Sep 99999999999 08:00:00 +0000"})
 
 
-# US feeds commonly stamp times with a zone abbreviation. dateutil doesn't
-# know "EDT" and hands back the wall-clock time as if it were UTC, which put
-# these articles four hours out and could drop a fresh story from a 24-hour
-# window, or keep a stale one. feedparser resolves the abbreviations itself.
+# dateutil treats zone abbreviations like EDT as UTC, putting US feeds hours
+# out. feedparser reads them correctly.
 @pytest.mark.parametrize("stamp, expected_hour", [
     ("Tue, 15 Sep 2026 08:00:00 EDT", 12),
     ("Tue, 15 Sep 2026 08:00:00 PST", 16),
@@ -215,8 +213,7 @@ def test_markup_is_stripped_from_summaries(feeds):
     assert article["summary"] == "Hello world"
 
 
-# Feeds hand back summaries as HTML, so once the tags are gone what's left
-# still carries entities. The model was being sent "AT&amp;T" and "&#8217;".
+# Summaries arrive as HTML, so entities remain after the tags are removed.
 @pytest.mark.parametrize("description, expected", [
     ("&lt;p&gt;AT&amp;amp;T &amp;amp; Verizon&amp;nbsp;merge&amp;#8217;s&lt;/p&gt;",
      "AT&T & Verizon merge’s"),
@@ -229,9 +226,8 @@ def test_entities_are_decoded_in_summaries(feeds, description, expected):
     assert article["summary"] == expected
 
 
-# Titles get the same treatment for the same reason. They also render
-# straight into the email on the headlines fallback, where a title of
-# "AT&amp;T <b>deal</b>" was escaped a second time and shown literally.
+# Titles are cleaned the same way. The headline fallback shows them
+# directly.
 @pytest.mark.parametrize("raw_title, expected", [
     ("AT&amp;T &lt;b&gt;deal&lt;/b&gt;", "AT&T deal"),
     ("Q&amp;A with the minister", "Q&A with the minister"),
@@ -254,8 +250,7 @@ def test_missing_or_empty_titles_become_untitled(feeds, item):
     assert article["title"] == "(untitled)"
 
 
-# An empty <title></title> used to become an empty outlet name, which
-# rendered as a blank next to every source from that feed.
+# An empty feed title would otherwise leave a blank outlet name.
 @pytest.mark.parametrize("channel_title", ["", "   ", None])
 def test_feed_without_a_usable_title_is_named_by_its_host(feeds, channel_title):
     feeds.serve(URL_A, rss({"title": "t", "link": "https://news.example/1", "pubDate": ago(1)},
@@ -264,8 +259,7 @@ def test_feed_without_a_usable_title_is_named_by_its_host(feeds, channel_title):
     assert article["source"] == "news.example"
 
 
-# Links come from whoever runs the feed and end up as href attributes in the
-# email, so anything that isn't a web link is dropped rather than rendered.
+# Feed links become hrefs in the email, so only web links are kept.
 @pytest.mark.parametrize("link, expected", [
     ("javascript:alert(1)", ""),
     ("JavaScript:alert(1)", ""),

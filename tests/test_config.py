@@ -98,10 +98,8 @@ def test_topics_must_be_an_array(write_config, config):
         digest.load_config()
 
 
-# Each of these used to load without complaint and then fail somewhere far
-# from the typo, or not fail at all. A feeds value written as a string, for
-# instance, was iterated character by character, every "URL" failed, and the
-# topic silently reported no new articles.
+# Each of these would otherwise fail far from the typo, or not at all. A
+# feeds string, for example, is read one character at a time.
 @pytest.mark.parametrize("bad_topic, field", [
     ("just a string", "topic"),
     (topic(feeds="https://feeds.example/rss"), "feeds"),

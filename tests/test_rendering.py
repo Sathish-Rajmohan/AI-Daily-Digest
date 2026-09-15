@@ -251,11 +251,11 @@ def test_no_topics_at_all_gives_the_empty_notice():
 
 def test_fact_sits_above_the_news():
     out = digest.build_html([("Tech", brief(), None)], DATE, {"field": "physics", "fact": "F.", "why": ""})
-    assert out.index(DATE) < out.index("One thing worth knowing") < out.index("Tech overview.")
+    assert out.index(DATE) < out.index("Fact of the day") < out.index("Tech overview.")
 
 
 def test_no_fact_block_without_a_fact():
-    assert "One thing worth knowing" not in digest.build_html([("Tech", brief(), None)], DATE)
+    assert "Fact of the day" not in digest.build_html([("Tech", brief(), None)], DATE)
 
 
 def test_styles_are_inline_and_the_output_is_compact():
@@ -318,10 +318,8 @@ class _Attributes(HTMLParser):
                 self.font_families.append(value.split("font-family:", 1)[1].split(";", 1)[0])
 
 
-# A font stack written with double quotes ("Segoe UI") inside a double-quoted
-# style attribute ends the attribute early. The rest of the stack turns into
-# junk attribute names and the font-family declaration is dropped, so every
-# client quietly fell back to its default font.
+# Double quotes in a font stack would end the style attribute early and drop
+# the font.
 def test_font_stacks_survive_inside_style_attributes():
     degraded = digest.headlines_only_brief([{"title": "H", "link": "https://x.example/", "source": "S"}], 3)
     out = digest.build_html([("Tech", brief(), None), ("World", degraded, None), ("Broken", None, "n")],

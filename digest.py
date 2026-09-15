@@ -1,12 +1,9 @@
 #!/usr/bin/env python3
-"""
-Daily News Digest
+"""Daily News Digest
 
-Reads topics.json, pulls recent items from each topic's RSS feeds,
-asks a model to write one synthesized brief per topic (using multiple
-outlets to fill in the picture), and emails an HTML digest via Gmail SMTP.
-
-Config stored in topics.json and environment variables (see README.md).
+Reads the feeds listed in topics.json, has a language model write a
+briefing for each topic, and emails the result through Gmail. Setup is in
+README.md.
 """
 
 import html
@@ -33,35 +30,26 @@ from dateutil import parser as dateparser
 
 CONFIG_PATH = os.environ.get("DIGEST_CONFIG_PATH", "topics.json")
 
-# When stdout is piped (as in Actions logs) Python block-buffers it, while
-# stderr stays unbuffered. The two can then land out of chronological order
-# in a combined log even though they were printed in order, which is
-# confusing to read after the fact. Line-buffer stdout so progress lines
-# and warning lines interleave the way they actually happened.
+# Actions pipes stdout, which Python buffers, while stderr isn't buffered.
+# Line buffering keeps progress lines and warnings in the order they happened.
 sys.stdout.reconfigure(line_buffering=True)
 
-# How many articles a topic may carry into the prompt. Set well above what a
-# quiet topic produces, because the cost of trimming is a story the digest
-# never mentions. _interleave_by_feed() below decides which ones survive when
-# a busy topic runs past this.
+# Most articles a topic can send to the model. This is well above a quiet
+# topic's count, and _interleave_by_feed() decides what fits on busy days.
 MAX_ARTICLES_PER_TOPIC = 100
 
-# Per-article snippet. RSS descriptions lead with the substance, so the tail
-# end is mostly boilerplate, and trimming it buys room for more articles at
-# the same token cost.
+# RSS summaries usually lead with the substance, so a short snippet leaves
+# room for more articles in the prompt.
 SNIPPET_CHARS = 300
 
 FEED_FETCH_TIMEOUT = 20
 
-# Feeds per topic fetched at once. Held low enough to stay a polite client
-# while keeping a topic's worst case to a couple of timeout rounds rather
-# than one per feed.
+# Feeds fetched at once per topic. Enough to keep a slow topic to a couple
+# of timeout rounds without hitting any one host too hard.
 FEED_FETCH_WORKERS = 8
 
-# feedparser's own fetch path (used as a fallback in fetch_feed() below)
-# doesn't take a timeout argument and can hang indefinitely on a bad host.
-# It falls back to the socket module's default timeout when none is given
-# explicitly, so set that process-wide to keep a worst-case feed bounded.
+# feedparser's fallback fetch in fetch_feed() takes no timeout argument and
+# can hang on a bad host. It uses the socket default, so set one here.
 socket.setdefaulttimeout(FEED_FETCH_TIMEOUT)
 
 USER_AGENT = (
@@ -81,10 +69,9 @@ def load_config():
     return config
 
 
-# The checks below exist because a typo in topics.json otherwise fails far
-# from where it was made, or not at all. A feeds value written as a single
-# string, for instance, gets iterated one character at a time, every "URL"
-# fails, and the topic quietly reports no new articles.
+# Catch mistakes in topics.json early. A feeds value written as a string, for
+# example, would be read one character at a time and the topic would report
+# no articles.
 
 def _check_topic(topic, index):
     if not isinstance(topic, dict):
@@ -128,14 +115,11 @@ def _check_settings(settings):
 
 
 def parse_entry_time(entry):
-    """
-    Best-effort publish time from a feedparser entry.
+    """Best-effort publish time for a feedparser entry, in UTC.
 
-    feedparser's own parsed structs come first. It resolves zone abbreviations
-    like EDT and PST and normalizes to UTC, whereas dateutil doesn't know
-    those abbreviations and hands back the wall-clock time as if it were UTC,
-    which put US feeds four to eight hours out against the lookback window.
-    The raw strings are only the fallback.
+    feedparser's parsed times come first because it understands zone
+    abbreviations like EDT. dateutil treats those as UTC, which puts US feeds
+    hours out. The raw strings are the fallback.
     """
     for key in ("published_parsed", "updated_parsed"):
         struct = entry.get(key)
@@ -157,11 +141,8 @@ def parse_entry_time(entry):
 
 
 def _clean_text(text):
-    """
-    Plain text from a feed field. Feeds hand titles and summaries back as
-    HTML, so once the tags are gone what's left still carries entities like
-    "&amp;" and "&#8217;", which would otherwise reach the model and, on the
-    headlines fallback, be escaped a second time and shown literally.
+    """Plain text from a feed title or summary. Feeds send these as HTML, so
+    strip the tags and decode entities like &amp;.
     """
     if not text:
         return ""
@@ -171,11 +152,9 @@ def _clean_text(text):
 
 
 def _web_link(url):
-    """
-    The URL if it's an absolute http(s) link, otherwise an empty string.
-    Links come from whoever runs the feed and end up as href attributes in
-    the email, so a javascript: or data: link is dropped rather than
-    rendered, as is a relative one that would lead nowhere from an inbox.
+    """The URL if it's an absolute http or https link, otherwise "". Feed links
+    become hrefs in the email, so javascript:, data: and relative links are
+    dropped.
     """
     url = (url or "").strip()
     try:
@@ -188,9 +167,8 @@ def _web_link(url):
 
 
 def fetch_feed(feed_url):
-    """
-    Fetch feed XML with an explicit timeout and User-Agent, then parse.
-    feedparser.parse(url) alone can hang indefinitely on a bad host.
+    """Fetch a feed with a timeout and User-Agent, then parse it. Calling
+    feedparser.parse(url) directly can hang on a bad host.
     """
     try:
         resp = requests.get(
@@ -201,15 +179,16 @@ def fetch_feed(feed_url):
         resp.raise_for_status()
         return feedparser.parse(resp.content)
     except requests.exceptions.RequestException as e:
-        # Some hosts dislike non-browser clients and only respond to
-        # feedparser's own defaults. Fall back to that.
+        # Some hosts turn away non-browser clients but accept feedparser's own
+        # request, so try that.
         print(f"  [warn] HTTP fetch failed for {feed_url}: {e}; trying feedparser", file=sys.stderr)
         return feedparser.parse(feed_url)
 
 
 def _safe_fetch_feed(feed_url):
-    """fetch_feed that reports its own failure instead of raising, so one
-    bad host can't take down the whole parallel batch."""
+    """fetch_feed(), but logs any error and returns None so one bad feed doesn't
+    stop the others.
+    """
     try:
         return fetch_feed(feed_url)
     except Exception as e:
@@ -223,12 +202,9 @@ def fetch_topic_articles(topic, lookback_hours):
     by_feed = []
     seen_links = set()
 
-    # Fetch in parallel, then process in the original feed order. These are
-    # dozens of independent HTTP calls, and done one at a time a topic's
-    # worst case is its feed count times the per-feed timeout, which on a
-    # long list is the whole job's time budget spent before a single word
-    # gets summarized. Only the waiting overlaps: the dedup below still runs
-    # in a fixed order, so the same inputs always give the same digest.
+    # Fetched in parallel, since a long list of dead feeds could otherwise use the
+    # whole run's time. Results are handled in the listed order, so duplicate
+    # links resolve the same way on every run.
     with ThreadPoolExecutor(max_workers=FEED_FETCH_WORKERS) as pool:
         fetched = list(pool.map(_safe_fetch_feed, feed_urls))
 
@@ -240,8 +216,7 @@ def fetch_topic_articles(topic, lookback_hours):
             print(f"  [warn] feed unreadable, skipping: {feed_url}", file=sys.stderr)
             continue
 
-        # An empty <title></title> would otherwise leave a blank where the
-        # outlet's name goes next to every source from this feed.
+        # Use the host name when the feed's title is empty.
         source_name = (
             _clean_text(parsed.feed.get("title")) or urlsplit(feed_url).netloc or feed_url
         )
@@ -249,8 +224,7 @@ def fetch_topic_articles(topic, lookback_hours):
 
         for entry in parsed.entries:
             pub_time = parse_entry_time(entry)
-            # Some feeds omit dates on posts that are otherwise fine to
-            # use, so undated items are kept instead of dropped.
+            # Keep undated items. Some feeds that are otherwise fine don't date posts.
             if pub_time is not None and pub_time < cutoff:
                 continue
 
@@ -278,17 +252,12 @@ def fetch_topic_articles(topic, lookback_hours):
 
 
 def _interleave_by_feed(by_feed, cap):
-    """
-    Take one article from each feed in turn, freshest first within a feed,
+    """Take one article from each feed in turn, newest first within each feed,
     until the cap is reached.
 
-    Sorting everything by time and cutting at the cap loses whole outlets on
-    a busy topic: one wire publishing every few minutes can fill every slot
-    and push a story the rest of the world led with out of the list
-    entirely. Going round the feeds instead means every outlet is
-    represented before any outlet gets a second turn, which is what actually
-    protects against missing a major story, since a major story is the one
-    thing several outlets all cover.
+    Cutting a time-sorted list lets one feed that posts every few minutes fill
+    every slot. Taking turns keeps every outlet in, and a big story is one that
+    many outlets cover.
     """
     picked = []
     round_index = 0
@@ -308,12 +277,9 @@ def _interleave_by_feed(by_feed, cap):
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
-# A 503 from Gemini means one model's shared serving pool is out of capacity
-# right now. Waiting and asking the same pool again usually returns the same
-# 503, so the chain below moves to a different model instead. Order runs from
-# the current Flash release down to the lighter Flash-Lite tier, which sits on
-# less contended capacity. Quality degrades a little at the bottom of the
-# chain, which beats a topic missing from the email.
+# Tried in order. A 503 means that model is out of capacity, and moving to
+# another model is faster than waiting for it. Flash-Lite, at the end, often
+# has capacity when the others don't.
 GEMINI_MODELS = [
     m.strip()
     for m in os.environ.get(
@@ -323,21 +289,18 @@ GEMINI_MODELS = [
     if m.strip()
 ]
 
-# GEMINI_MODEL still pins a first choice, with the rest of the chain kept
-# underneath it as fallbacks.
+# GEMINI_MODEL moves one model to the front and keeps the rest as fallbacks.
 _pinned_model = os.environ.get("GEMINI_MODEL")
 if _pinned_model:
     GEMINI_MODELS = [_pinned_model] + [m for m in GEMINI_MODELS if m != _pinned_model]
 
-# An empty or all-whitespace override would otherwise leave nothing to call.
+# A blank override would leave nothing to call.
 if not GEMINI_MODELS:
     GEMINI_MODELS = ["gemini-flash-latest"]
 
-# Groq sits at the bottom of the chain as a non-Google fallback. Every Gemini
-# model shares Google's infrastructure, so an incident on their side takes the
-# whole chain above with it. Groq is only reached once all of those have
-# already failed, which keeps the digest's voice consistent on normal days.
-# Leave GROQ_API_KEY unset to skip it entirely.
+# Groq runs outside Google, so it still answers during a Google-wide outage.
+# It's only used after every Gemini model fails. Leave GROQ_API_KEY unset to
+# skip it.
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 GROQ_ENDPOINT = "https://api.groq.com/openai/v1/chat/completions"
 GROQ_MODELS = [
@@ -348,35 +311,28 @@ GROQ_MODELS = [
     if m.strip()
 ]
 
-# Attempts against a single model before moving down the chain. Three is
-# enough to ride out a brief blip; past that the pool is genuinely saturated
-# and another model is the faster route to an answer.
+# Attempts per model before moving on. Three is enough for a brief blip.
 ATTEMPTS_PER_MODEL = 3
 BACKOFF_BASE = 4
 REQUEST_TIMEOUT = 90
 
-# Headroom for the longest topic. A briefing runs well under this, but some
-# of these models spend output tokens on internal reasoning before the JSON,
-# so the ceiling needs to clear both.
+# Some models spend output tokens on reasoning before the JSON, so leave
+# plenty of room above a normal briefing's length.
 MAX_OUTPUT_TOKENS = 8192
 
-# How many articles each provider is sent. Gemini has room for the full list.
-# Groq's free tier meters tokens per minute rather than per request, and a
-# hundred articles plus the reply would spend most of a minute's allowance on
-# one topic, so the emergency path gets a shorter list. Fewer articles is a
-# smaller picture, which still beats no briefing at all.
+# Articles sent to each provider. Groq's free tier limits tokens per minute,
+# and 100 articles would use most of a minute's allowance on one topic.
 PROVIDER_ARTICLE_CAP = {"gemini": MAX_ARTICLES_PER_TOPIC, "groq": 45}
 
-# Ceiling on the wall-clock time all summarization may take in one run.
-# Without it, a broad outage means every topic serially exhausts its own retry
-# budget and the job runs until the workflow timeout kills it mid-flight,
-# sending nothing at all.
+# Time limit for all model calls in a run. In a broad outage it ends the run
+# with headlines before the workflow timeout would kill it.
 TOTAL_BUDGET = 480
 
 
 def build_model_chain():
-    """Every (provider, model) pair to try, best first. A provider with no
-    key configured is left out rather than called and rejected."""
+    """Every (provider, model) pair to try, in order. Providers without a key
+    are left out.
+    """
     chain = []
     if GEMINI_API_KEY:
         chain += [("gemini", m) for m in GEMINI_MODELS]
@@ -384,14 +340,10 @@ def build_model_chain():
         chain += [("groq", m) for m in GROQ_MODELS]
     return chain
 
-# Persona and standing rules live in systemInstruction, not the user turn.
-# Gemini processes system instructions before the request content, so they
-# don't compete with the article list for attention. The rules are literal
-# numbered constraints ("about 15-20 words", "never past 25") rather than
-# vague guidance ("keep it readable"), since concrete limits are followed
-# far more reliably than adjectives. The worked example at the end targets
-# density directly, which is the failure mode plain instructions are worst
-# at preventing on their own.
+# The rules go in the system instruction so the article list doesn't bury
+# them. They're given as numbers ("about 15-20 words") because models follow
+# numbers more closely than adjectives. Dense sentences were the most common
+# problem, which is what the example at the end is for.
 SYSTEM_INSTRUCTION = """You are a news editor writing a daily briefing for a \
 busy general reader. Each request gives you a numbered list of recent \
 articles, possibly from several outlets, about one topic. Your job is to \
@@ -423,10 +375,10 @@ LANGUAGE
 One idea per sentence.
 6. Use the active voice. Write "the central bank raised rates", not "rates \
 were raised by the central bank".
-7. Use everyday words. Where a technical term is genuinely unavoidable, \
+7. Use everyday words. Where a technical term can't be avoided, \
 explain it in plain words in the same sentence the first time it appears.
 8. Use at most one subordinate clause per sentence. Split a long sentence \
-into two rather than joining the halves with a semicolon or a dash.
+into two, and don't join the halves with a semicolon or a dash.
 9. Start each paragraph with its point and then support it. Do not build up \
 to the point.
 
@@ -437,8 +389,8 @@ on outside or prior knowledge, even if you believe it to be true or think it \
 would round out the picture. If the given articles don't say it, it does not \
 go in the briefing.
 11. If articles disagree on a specific detail (a figure, a cause, an \
-attribution), say so briefly rather than silently picking one version.
-12. Stay neutral. Describe positions and disputes rather than settling them, \
+attribution), say so briefly instead of picking one version.
+12. Stay neutral. Describe positions and disputes without settling them, \
 and attribute claims to whoever made them instead of stating them as fact.
 13. Fill "article_ids" for a story BEFORE writing its detail. List every \
 article that story draws on and no others. Never invent an id, and never \
@@ -464,16 +416,11 @@ the rest of the year."
 
 Both carry the same information. Write the second every time."""
 
-# Kept deliberately shallow. Flash-class models get unreliable on deeply
-# nested schemas (repetitive output, brackets left unclosed at the token
-# limit) and Google's own docs warn that very large or deeply nested schemas
-# may be rejected outright. article_ids is a flat list of integers rather
-# than a list of one-field objects, which removes a nesting level from the
-# old shape even though the output now carries more structure than it did.
+# Kept shallow because Flash models get unreliable with deeply nested
+# schemas. article_ids is a flat list of integers for the same reason.
 #
-# propertyOrdering makes the model fill fields in a useful order: the cited
-# ids before the prose that leans on them, and the whole story list before
-# the overview that summarizes it. Both are generated in the order listed.
+# propertyOrdering has the model write the cited ids before the prose that
+# uses them, and the stories before the overview that sums them up.
 BRIEF_SCHEMA = {
     "type": "OBJECT",
     "description": "One day's briefing for a single news topic.",
@@ -520,8 +467,8 @@ BRIEF_SCHEMA = {
             "type": "STRING",
             "description": (
                 "2-3 sentences on what matters most across this topic today, "
-                "per rule 1. Written after the stories, standing on its own "
-                "for a reader who stops there, and not a restatement of the "
+                "per rule 1. Written after the stories, complete enough for a "
+                "reader who reads nothing else, and not a restatement of the "
                 "subheadings."
             ),
         },
@@ -532,12 +479,10 @@ BRIEF_SCHEMA = {
 
 
 def _to_json_schema(node):
-    """
-    Translate the schema above into the JSON Schema dialect that
-    OpenAI-compatible endpoints expect, so there's only one schema to keep
-    correct. Types are uppercase in Gemini's dialect and lowercase here,
-    propertyOrdering has no equivalent, and strict mode wants every property
-    listed as required with additionalProperties pinned off.
+    """Convert a schema from Gemini's format to the JSON Schema that
+    OpenAI-compatible APIs take. Types become lowercase, propertyOrdering is
+    dropped, and strict mode needs every property required with
+    additionalProperties set to false.
     """
     if not isinstance(node, dict):
         return node
@@ -565,14 +510,11 @@ BRIEF_SCHEMA_JSON = _to_json_schema(BRIEF_SCHEMA)
 
 
 class _ModelUnusable(Exception):
-    """The model name itself is rejected, so no amount of retrying helps."""
+    """The model name was rejected, so retrying won't help."""
 
 
-# Models rejected by name, providers whose credentials don't work, and the
-# cutoff for all summarization. All three are per-process: one bad model name
-# or one dead key shouldn't be re-probed once per topic. A provider failing
-# auth disables only that provider, so a bad Gemini key still leaves Groq to
-# fall back to.
+# These last for the whole run, so a bad model name or key isn't retried on
+# every topic. A rejected key only disables its own provider.
 _unusable_models = set()
 _disabled_providers = set()
 _deadline = None
@@ -590,7 +532,7 @@ def _budget_left():
 
 
 def _sleep_within_budget(seconds):
-    """Sleep, never past the deadline. False means there's no time left."""
+    """Sleep, but not past the deadline. Returns False once time has run out."""
     left = _budget_left()
     if left <= 0:
         return False
@@ -599,18 +541,17 @@ def _sleep_within_budget(seconds):
 
 
 def _backoff(attempt):
-    """
-    Exponential with jitter. The jitter matters more than the growth here:
-    a fixed schedule means every retry lands on the same congested moment,
-    while an offset one has a chance of arriving after capacity frees up.
+    """Exponential backoff with jitter, so retries from a busy moment don't all
+    arrive together.
     """
     base = BACKOFF_BASE * (2 ** (attempt - 1))
     return base * (0.7 + random.random() * 0.6)
 
 
 def _retry_after(resp):
-    """Seconds from a Retry-After header, capped so a large value can't
-    swallow the whole run's budget. None when absent or unparseable."""
+    """Seconds from a Retry-After header, capped at 60. None if it's missing or
+    unreadable.
+    """
     raw = (resp.headers.get("Retry-After") or "").strip()
     if not raw:
         return None
@@ -626,21 +567,16 @@ def _gemini_request(model, prompt, system, schema):
         "Content-Type": "application/json",
         "x-goog-api-key": GEMINI_API_KEY,
     }
-    # No temperature, top_p or top_k. Every model in the chain is a 3.x, and
-    # Google's guidance for that generation is to drop the sampling knobs
-    # and steer with the system instruction instead: these models are tuned
-    # around their defaults, and a low temperature is the documented cause of
-    # looping and degraded output. Looping is also exactly how they fail
-    # structured output, by repeating until the token limit cuts the JSON off.
+    # No temperature, top_p or top_k. Google advises leaving them at their
+    # defaults for Gemini 3 models, and a low temperature can make them repeat
+    # until the token limit cuts off the JSON.
     body = {
         "systemInstruction": {"parts": [{"text": system}]},
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {
             "responseMimeType": "application/json",
             "responseSchema": schema,
-            # Set explicitly so a long topic can't run into a low default and
-            # come back as JSON cut off mid-string, which is how these models
-            # fail on structured output rather than with a clean error.
+            # High enough that a long briefing isn't cut off mid-JSON.
             "maxOutputTokens": MAX_OUTPUT_TOKENS,
         },
     }
@@ -648,8 +584,9 @@ def _gemini_request(model, prompt, system, schema):
 
 
 def _gemini_extract(data, topic_name):
-    """Pull the JSON text out of a Gemini response, or None if it was
-    blocked or came back in a shape we don't recognize."""
+    """The JSON text from a Gemini response, or None if the response was blocked
+    or has an unexpected shape.
+    """
     candidates = data.get("candidates") or []
     if not candidates:
         feedback = data.get("promptFeedback") or {}
@@ -671,9 +608,8 @@ def _groq_request(model, prompt, system, schema):
         "Content-Type": "application/json",
         "Authorization": f"Bearer {GROQ_API_KEY}",
     }
-    # Temperature is left off here too. gpt-oss is documented as wanting the
-    # default of 1.0, and the schema below pins the structure regardless of
-    # how the sampler is set.
+    # No temperature here either. gpt-oss expects its default, and the schema
+    # fixes the structure regardless.
     body = {
         "model": model,
         "max_tokens": MAX_OUTPUT_TOKENS,
@@ -681,8 +617,8 @@ def _groq_request(model, prompt, system, schema):
             {"role": "system", "content": system},
             {"role": "user", "content": prompt},
         ],
-        # strict constrained decoding, so the reply matches BRIEF_SCHEMA the
-        # same way Gemini's responseSchema does.
+        # Strict mode holds the reply to the schema, like responseSchema does for
+        # Gemini.
         "response_format": {
             "type": "json_schema",
             "json_schema": {
@@ -722,11 +658,11 @@ _PROVIDERS = {
 
 
 def _call_model(provider, model, prompt, topic_name, system, schema):
-    """
-    Run one prompt against one model, retrying only what's worth retrying.
-    Returns the model's raw JSON text, or None if it didn't answer in time.
-    Raises _ModelUnusable when the model name itself is the problem, so the
-    caller drops it instead of trying it again on the next topic.
+    """Send one prompt to one model, retrying errors that may clear up.
+
+    Returns the reply's JSON text, or None if the model didn't answer in time.
+    Raises _ModelUnusable when the model name is rejected, so the caller can
+    drop it.
     """
     spec = _PROVIDERS[provider]
     url, headers, body = spec["build"](model, prompt, system, schema)
@@ -749,9 +685,8 @@ def _call_model(provider, model, prompt, topic_name, system, schema):
         code = resp.status_code
 
         if code == 200:
-            # A 200 isn't always the provider talking. A captive portal or a
-            # proxy's error page comes back as HTML, and letting that raise
-            # would end the whole chain instead of trying the next model.
+            # A proxy or captive portal can answer 200 with an HTML page. Count that as no
+            # answer so the next model gets a turn.
             try:
                 data = resp.json()
             except ValueError:
@@ -763,13 +698,11 @@ def _call_model(provider, model, prompt, topic_name, system, schema):
             return spec["extract"](data, topic_name)
 
         if code in (400, 404):
-            # Wrong or retired model ID for this key. Every later call to it
-            # would fail the same way.
+            # Unknown or retired model name. Later calls would fail the same way.
             raise _ModelUnusable(f"{code}: {resp.text[:200]}")
 
         if code in (401, 403):
-            # Credentials, not capacity. Disable this provider for the run
-            # and let the chain fall through to the next one.
+            # Bad credentials. Skip this provider for the rest of the run.
             print(
                 f"  [error] {label}: {code}, credentials rejected. "
                 f"{spec['auth_hint']} Skipping {provider} for the rest of "
@@ -799,25 +732,20 @@ def _call_model(provider, model, prompt, topic_name, system, schema):
     return None
 
 
-# Rotated by date so the subject changes every day and comes back around
-# only after a fortnight. Left to its own devices a model gravitates to the
-# same handful of physics and biology chestnuts.
+# The subject changes daily and repeats every fourteen days. Left to choose,
+# a model keeps picking the same few well-known facts.
 FACT_FIELDS = [
     "physics", "biology", "economics", "history", "psychology",
     "mathematics", "engineering", "linguistics", "geology", "medicine",
     "astronomy", "chemistry", "anthropology", "computer science",
 ]
 
-# Second rotating axis. A field on its own is a broad ask, and asked the same
-# broad way every fortnight a model returns its most famous answer for that
-# field. Pairing the field with an angle makes the request specific enough
-# that the obvious answer often doesn't fit. 11 is coprime with the 14
-# fields, so a given pair doesn't come back for 154 days.
+# The angle is picked separately. Asking about a field the same broad way
+# brings back its most famous fact, and an angle narrows the question. With
+# 11 angles and 14 fields, a pairing repeats every 154 days.
 #
-# The angles are deliberately everyday. An earlier set asked for things like
-# "a hard limit, and what sets it" and got exactly what that invites: an
-# abstract, jargon-heavy mechanism nobody could picture. Each angle here
-# points at something a reader can see, hold, or has wondered about.
+# The angles stay everyday and concrete. Abstract ones such as "a hard limit,
+# and what sets it" produced dense, jargon-heavy facts.
 FACT_ANGLES = [
     "something ordinary that works differently than most people guess",
     "a number that sounds wrong but is true",
@@ -832,20 +760,13 @@ FACT_ANGLES = [
     "a simple reason behind something people see all the time",
 ]
 
-# Stated in FACT_SYSTEM and checked against what comes back.
+# Word limits given in FACT_SYSTEM and checked on each reply.
 FACT_MAX_WORDS = 25
 EXPLANATION_MAX_WORDS = 40
 
-# Built from what makes a fact land and stay with someone. Surprise gets
-# attention, but curiosity needs something to hold on to: a twist on what the
-# reader half knows opens a gap they want closed, where a fact about
-# something unfamiliar opens nothing. Concrete beats abstract. A number is
-# only understood next to a familiar comparison, and round numbers are easier
-# to hold than exact ones. The explanation has to survive being told to a
-# curious 12-year-old, which is also roughly the reading level plain-language
-# guidance sets for a general audience. The worked example is a real fact
-# this digest sent that failed on all of those, next to a rewrite that
-# doesn't. Style is the thing examples teach better than rules.
+# Based on research into memorable facts. A surprise lands best on something
+# the reader half knows, and a number needs a familiar comparison. The WRONG
+# example is a real fact the digest sent before these rules.
 FACT_SYSTEM = f"""You write one fun fact a day for a curious adult reading \
 their morning email. It should take about ten seconds to read, make sense on \
 the first pass, and leave them knowing something new they could tell a friend.
@@ -930,13 +851,11 @@ FACT_SCHEMA = {
 
 
 def fetch_fact_of_the_day(today):
-    """
-    One thing worth knowing, from the same model chain as the briefings.
+    """The fact of the day, from the same model chain as the briefings.
 
-    Unlike everything else in the digest this isn't grounded in a fetched
-    article, so it carries no sources and is the model's own knowledge.
-    Runs after the topics so news always gets first call on the time budget,
-    and returns None rather than holding up the email if nothing answers.
+    It comes from the model's own knowledge, so it has no sources. It runs
+    after the topics so they use the time budget first, and returns None if no
+    model answers.
     """
     ordinal = today.toordinal()
     field = FACT_FIELDS[ordinal % len(FACT_FIELDS)]
@@ -961,8 +880,7 @@ def fetch_fact_of_the_day(today):
     if not text:
         return None
 
-    # The limits in FACT_SYSTEM, checked against what actually came back, so
-    # a drift back toward dense facts shows up in the log before the inbox.
+    # Log the lengths so a drift back to long facts shows up.
     fact_words, why_words = len(text.split()), len(why.split())
     print(f"  fact is {fact_words} words, explanation {why_words}")
     if fact_words > FACT_MAX_WORDS or why_words > EXPLANATION_MAX_WORDS:
@@ -975,14 +893,11 @@ def fetch_fact_of_the_day(today):
 
 
 def run_chain(build_prompt, system, schema, label):
-    """
-    Walk the provider chain until a model answers with JSON that parses.
+    """Try each model in the chain until one replies with valid JSON.
 
-    Each model that doesn't answer costs a few seconds rather than the
-    minutes a same-model retry loop spends waiting on capacity that isn't
-    coming back. `build_prompt` takes the article cap for the provider being
-    tried, so a provider on a tighter token budget gets a shorter list.
-    Returns the decoded object, or None.
+    `build_prompt` receives the article cap for the provider being tried, so a
+    provider with a tighter limit gets a shorter list. Returns the decoded
+    JSON, or None.
     """
     chain = build_model_chain()
     if not chain:
@@ -1006,11 +921,8 @@ def run_chain(build_prompt, system, schema, label):
             print(f"  [warn] {provider}/{model} didn't answer, trying the next model", file=sys.stderr)
             continue
 
-        # Parsed here rather than after the loop. These models fail
-        # structured output by truncating mid-JSON, and stopping at the first
-        # model that returned any text at all let one cut-off reply sink the
-        # topic with healthy models still untried below it. The model isn't
-        # retired for the run, since truncation is usually a one-off.
+        # Parse inside the loop so a reply cut off mid-JSON falls through to the next
+        # model. The model stays in the chain, since a cut-off is usually a one-off.
         ok, value = _decode_reply(text)
         if not ok:
             print(
@@ -1030,8 +942,9 @@ def run_chain(build_prompt, system, schema, label):
 
 
 def _decode_reply(text):
-    """(True, decoded) for a reply that parses as JSON, (False, error)
-    otherwise. Tolerates a markdown code fence around the JSON."""
+    """(True, value) if the reply parses as JSON, else (False, error). Handles a
+    markdown code fence around the JSON.
+    """
     if text.startswith("```"):
         text = text.strip("`")
         if text.lower().startswith("json"):
@@ -1043,28 +956,22 @@ def _decode_reply(text):
 
 
 def summarize_topic(topic_name, articles, max_developments):
-    """
-    Get ONE briefing per topic from the first model in the chain that answers.
+    """One briefing for a topic, from the first model that answers.
 
-    Multiple outlets covering the same development are fused into one story
-    rather than repeated. Sources are cited by numeric id and resolved back
-    to the real title/link/outlet from `articles` below, so a mistyped or
-    invented URL can never reach the email. Returns None, or
+    The model cites articles by number, and titles, links and outlets are
+    filled in from `articles`, so it can't invent a URL. Returns None or
     {overview, stories: [{subheading, detail, sources}, ...]}.
     """
     if not articles:
         return None
 
-    # 1-indexed so article_id in the model's response maps straight back to
-    # this dict. The model only ever sees id, title, outlet, and snippet,
-    # never the link, so there's nothing for it to mistype or invent. The
-    # real link comes back from `by_id` once the model has answered.
+    # Numbered from 1 to match the ids the model cites. The model gets the id,
+    # title, outlet and snippet, never the link.
     by_id = {i: a for i, a in enumerate(articles, start=1)}
 
     def build_prompt(cap):
-        # Ids stay stable across providers because a shorter list is just the
-        # front of the same list, so an id cited by any model resolves against
-        # the same by_id map.
+        # A shorter list for one provider is the front of the same list, so an id
+        # points at the same article whichever model answers.
         numbered = [
             {
                 "id": i,
@@ -1075,18 +982,12 @@ def summarize_topic(topic_name, articles, max_developments):
             for i, a in list(by_id.items())[:cap]
         ]
 
-        # The article list comes first, fenced in a tag, and the instruction
-        # comes last with an anchor phrase pointing back at it. That ordering
-        # is what Google recommends for a prompt built around a large data
-        # block, and the tag gives the model an unambiguous boundary between
-        # the data and what to do with it.
+        # Data first and instructions last, with the data inside a tag. Google
+        # suggests this layout for long inputs.
         #
-        # Titles and snippets come from whoever runs the feed, so one
-        # containing "</articles>" could otherwise end the fence early and
-        # have what follows read as instructions. Escaping the angle brackets
-        # as < and > decodes to the identical JSON, but leaves
-        # nothing inside that can close the tag. The topic name is escaped
-        # for the same reason, since it sits in an attribute.
+        # Feed text could contain the closing tag and end the list early. Escaping
+        # angle brackets inside the JSON leaves it identical once decoded. The topic
+        # name is escaped too, because it goes in an attribute.
         outlets = len({a["source"] for a in list(by_id.values())[:cap]})
         data = (
             json.dumps(numbered, ensure_ascii=False)
@@ -1112,8 +1013,7 @@ with those. Keep the sentences short and plain, per language rules 5-9.
     if brief is None:
         return None
 
-    # An earlier version of the prompt returned a list of stories. Refuse
-    # that shape so a list never gets emailed as separate summaries again.
+    # A bare list isn't a briefing, so refuse it.
     if isinstance(brief, list):
         print(
             f"  [warn] model returned a list for {topic_name}; expected one briefing object",
@@ -1150,12 +1050,9 @@ with those. Keep the sentences short and plain, per language rules 5-9.
 
 
 def average_sentence_length(brief):
-    """
-    Mean words per sentence across a briefing's prose. Readability guidance
-    for general-audience news puts the target around 15-20 words, so this
-    is a cheap way to see from the log whether the language rules in the
-    system instruction are actually landing. Returns None with nothing to
-    measure.
+    """Mean words per sentence across a briefing's overview and story text.
+    Logged on each run to check the prompt's 15-20 word target. None if there's
+    no text.
     """
     prose = [brief.get("overview") or ""]
     prose += [s.get("detail") or "" for s in brief.get("stories") or []]
@@ -1169,11 +1066,9 @@ def average_sentence_length(brief):
 
 
 def _resolve_sources(article_ids, by_id, topic_name):
-    """
-    Turn the ids a story cited into real articles. The model never sees a
-    link, so the title, link, and outlet all come from what we fetched
-    rather than from anything it wrote. An id it invented resolves to
-    nothing and is dropped.
+    """Look up the articles a story cited. Titles, links and outlets come from the
+    fetched articles, so nothing the model wrote becomes a link. Unknown ids
+    are dropped.
     """
     sources = []
     seen = set()
@@ -1203,11 +1098,9 @@ def _resolve_sources(article_ids, by_id, topic_name):
 
 
 def _as_article_id(raw):
-    """
-    An integer id from whatever the model cited, or None. Digit strings and
-    whole-number floats are accepted. A fraction or a boolean is not: int()
-    would quietly turn 2.7 into 2 and True into 1, citing a real article the
-    model never pointed at.
+    """An integer id from what the model cited, or None. Accepts digit strings and
+    whole-number floats. Rejects fractions and booleans, which int() would turn
+    into a different id.
     """
     if isinstance(raw, bool):
         return None
@@ -1224,12 +1117,8 @@ def _as_article_id(raw):
 
 
 def headlines_only_brief(articles, max_developments):
-    """
-    Stand-in for a topic when no model would answer. The articles are
-    already fetched and their titles and links are real, so the topic can
-    still carry usable news instead of dropping out of the email. Flagged
-    degraded so build_html can label it rather than pass it off as a
-    written brief.
+    """A plain list of headlines for a topic no model could summarise. Marked
+    degraded so the email labels it as headlines.
     """
     picked = articles[: max(3, min(max_developments, 6))]
     if not picked:
@@ -1248,25 +1137,18 @@ def headlines_only_brief(articles, max_developments):
     }
 
 
-# Palette. A cool, faintly green-grey ground and near-black inks rather than
-# pure black and white, since Gmail's apps invert colours in dark mode and
-# extreme values invert harshest. Every text colour here clears WCAG AA
-# against the card, which a test checks.
+# Off-black and off-white, because Gmail's apps invert colours in dark mode
+# and pure black and white invert badly. Every text colour passes WCAG AA
+# against the card, and a test checks it.
 #
-# Each topic gets its own deep ink, used on its name, its links and its
-# "Read more" cue, and the masthead strip shows the day's stories in the same
-# inks. On a long scroll that's how a reader knows which section they're in
-# without scrolling back up. The inks are dark and desaturated so five of
-# them sit together without the email getting loud, and so a dark-mode
-# inversion only lightens them rather than breaking them.
+# Each topic gets a dark, muted colour for its name, links and "Read more"
+# label. The strip at the top of the email uses the same colours.
 #
-# Font names are single-quoted. These stacks go inside double-quoted style
-# attributes, where a double quote ends the attribute early and the whole
-# font-family declaration is thrown away.
+# Font names use single quotes because these stacks go inside double-quoted
+# style attributes.
 _FONT_STACK = "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif"
-# Georgia is the one serif every mail app has, including Outlook and the
-# Gmail apps, neither of which load web fonts. Android has no Georgia and
-# falls back to its own serif, which keeps the contrast with the sans body.
+# Georgia is available in every major mail app. Android doesn't have it and
+# uses its own serif.
 _SERIF_STACK = "Georgia,'Times New Roman',Times,serif"
 _PAGE_BG = "#eef2f1"
 _CARD_BG = "#fcfdfc"
@@ -1280,14 +1162,14 @@ _WARN_BORDER = "#f0dca0"
 _WARN_TEXT = "#8a6100"
 _TOPIC_INKS = ["#0e6a66", "#9a2c3c", "#34489a", "#52661d", "#8b5a06", "#7a3e7c"]
 
-# Reading speed for the masthead's time estimate, a common figure for adults
-# reading on screen.
+# Words per minute for the reading-time estimate.
 _READING_WPM = 230
 
 
 def _topic_ink(index):
-    """A topic's ink, by its position in topics.json, so a topic keeps its
-    colour from day to day even when another topic has nothing to show."""
+    """A topic's colour, picked by its position in topics.json so it stays the
+    same from day to day.
+    """
     return _TOPIC_INKS[index % len(_TOPIC_INKS)]
 
 
@@ -1303,21 +1185,18 @@ def _paragraphs_to_html(text, size=15, color=None, margin="0 0 12px 0"):
 
 
 def _sources_html(sources, label="Sources", ink=_ACCENT):
-    """The compact link list that sits under a story, in its topic's ink."""
+    """The source links under a story, in the topic's colour."""
     items = ""
     for s in sources or []:
         title = html.escape(s.get("title") or "(untitled)")
         link = _web_link(s.get("link"))
         outlet = html.escape(s.get("outlet") or "")
         outlet_bit = f" ({outlet})" if outlet else ""
-        # Checked again here as well as at fetch time, since this is where a
-        # link actually becomes an href. Without a usable link the title is
-        # still listed, just not clickable.
+        # Links are checked again here, where they become hrefs. A title without a
+        # usable link is still listed.
         #
-        # The arrow sits inside the link, and the outlet is bare text taking
-        # the list item's muted colour. A full digest carries over a hundred
-        # of these, and a separate span apiece costs several KB of Gmail's
-        # 102KB budget.
+        # The arrow goes inside the link and the outlet is plain text. That saves a
+        # span per source, which adds up to a few KB across a full digest.
         if link:
             title_html = (
                 f'<a href="{html.escape(link, quote=True)}" style="color:{ink};'
@@ -1343,10 +1222,8 @@ def _sources_html(sources, label="Sources", ink=_ACCENT):
 
 
 def _build_preheader(topic_results):
-    """
-    Short summary shown as the inbox preview line, built from the story
-    subheadings that actually came back this run. Capped well under what any
-    client displays, so it never gets cut off mid-thought.
+    """The inbox preview text: the first subheading from each topic, capped at
+    140 characters.
     """
     subheadings = []
     for _, brief, _ in topic_results:
@@ -1356,7 +1233,7 @@ def _build_preheader(topic_results):
             sub = (story.get("subheading") or "").strip()
             if sub:
                 subheadings.append(sub)
-                break  # one per topic keeps the line varied
+                break  # first subheading per topic
     if not subheadings:
         return "Your daily digest is ready."
     text = " • ".join(subheadings)
@@ -1370,8 +1247,7 @@ def _plural(count, singular, plural):
 
 
 def _story_count(brief):
-    """How many items a topic carries: written stories, or on the headline
-    fallback, headlines."""
+    """Stories in a topic, or headlines if it's the fallback list."""
     stories = brief.get("stories") or []
     if brief.get("degraded"):
         return sum(len(s.get("sources") or []) for s in stories)
@@ -1388,7 +1264,7 @@ def _topic_outlets(brief):
 
 
 def _topic_meta(brief):
-    """The small line under a topic's name: how much is in it."""
+    """The line under a topic's name, such as "8 stories · 5 outlets"."""
     count = _story_count(brief)
     if brief.get("degraded"):
         meta = _plural(count, "headline", "headlines")
@@ -1405,11 +1281,9 @@ def _words(text):
 
 
 def _digest_summary(topic_results, fact, collapsible):
-    """
-    What the masthead reports about the day: stories per topic, the outlets
-    cited, and roughly how long the email takes to read. Every figure is
-    counted from what's actually in this email. With stories folded, the
-    estimate covers what's on screen before anything is opened.
+    """Totals for the top of the email: stories per topic, outlets cited and
+    reading time, all counted from this email. With stories folded, the reading
+    time only covers what shows before anything is opened.
     """
     topics = []
     outlets = set()
@@ -1456,10 +1330,8 @@ def _footer_text(summary):
 
 
 def _topic_strip_html(summary):
-    """
-    A thin bar split into each topic's ink, each segment sized by that
-    topic's share of the day's stories, so a glance shows which topics were
-    busy. Table cells with bgcolor, because that's what Outlook paints.
+    """A thin bar split into topic colours, each part sized by that topic's share
+    of stories. Table cells with bgcolor, so Outlook draws it.
     """
     topics = [t for t in summary["topics"] if t["count"]]
     total = sum(t["count"] for t in topics)
@@ -1481,7 +1353,7 @@ def _topic_strip_html(summary):
 
 
 def _topic_index_html(summary):
-    """The key to the strip: each topic's name beside its ink and count."""
+    """The key for the bar: each topic's colour, name and story count."""
     entries = [
         f'<span style="white-space:nowrap;margin-right:14px;">'
         f'<span style="color:{_topic_ink(t["index"])};">&#9632;</span>&nbsp;'
@@ -1495,14 +1367,7 @@ def _topic_index_html(summary):
 
 
 def _fact_block(fact):
-    """
-    The one-a-day fact, the first thing to read after the masthead.
-
-    Set apart by type rather than a box: the fact in the serif at a size
-    nothing else in the email uses, and the explanation in plain body text
-    beneath it. It's the part worth reading slowly, and it gets skipped if
-    it's buried under five topics.
-    """
+    """The fact of the day, shown after the header in large serif type."""
     if not fact:
         return ""
     why = (
@@ -1514,36 +1379,24 @@ def _fact_block(fact):
         f'<div style="margin-top:34px;">'
         f'<div style="font-size:11px;font-weight:700;letter-spacing:0.12em;'
         f'text-transform:uppercase;color:{_TEXT_MUTED};">'
-        f'One thing worth knowing &middot; {html.escape(fact["field"])}</div>'
+        f'Fact of the day &middot;{html.escape(fact["field"])}</div>'
         f'<p style="font-family:{_SERIF_STACK};font-size:22px;line-height:1.4;'
         f'color:{_TEXT_HEADING};margin:10px 0 0 0;">{html.escape(fact["fact"])}</p>'
         f'{why}</div>'
     )
 
 
-# Collapsing stories in the regular HTML email, for the apps that can.
+# Folding stories in the regular HTML email. Email has no JavaScript, so a
+# hidden checkbox inside a <label> switches a CSS rule that hides the story.
 #
-# There's no JavaScript in email, so this is the checkbox technique: a hidden
-# checkbox, a <label> that toggles it, and CSS that hides the story body while
-# the box is ticked. Two details keep it from ever losing information in an
-# app that only half supports it:
+# The box starts ticked and the hiding rule needs input:checked, so apps
+# without :checked support (Gmail's HTML view, Outlook for Windows) show every
+# story open. The label wraps the checkbox because some apps rename ids, and a
+# for= link would break.
 #
-# - The box starts ticked, and the only rule that hides anything requires
-#   input:checked. An app that ignores :checked (Gmail's regular HTML view,
-#   Outlook for Windows, Proton Mail) never matches it, so every story stays
-#   open there. The obvious version, hiding by default and showing on
-#   :checked, would leave stories permanently hidden in Gmail, which keeps
-#   display:none but drops :checked.
-# - The label wraps the checkbox rather than pointing at it with for= and an
-#   id. Some apps rewrite ids, which would break the link and leave a story
-#   stuck closed in an app that does support :checked.
-#
-# :checked sits on a bare input type selector because Outlook.com and
-# Outlook's apps only support it that way, and there are no CSS comments
-# because Yahoo ignores the rule after one. The "Read more" cue's type is set
-# in the rule rather than inline: the cue only ever shows where this
-# stylesheet applies, so styling it inline would spend bytes on every story
-# for nothing.
+# Outlook.com only supports :checked on a plain element selector. There are
+# no CSS comments because Yahoo skips the rule after one. The "Read more"
+# label is styled here because it only appears where this CSS works.
 _COLLAPSE_CSS = (
     "<style>"
     ".dd-story input:checked ~ .dd-body { display:none !important; }"
@@ -1554,11 +1407,8 @@ _COLLAPSE_CSS = (
 
 
 def _collapsible_story_html(story, sources_label, ink=_ACCENT):
-    """
-    One story in the regular HTML email, folded to its subheading where the
-    app supports it and fully open everywhere else. A story with nothing
-    beneath its subheading is rendered as a plain line, since a tap that
-    opens nothing is worse than no tap at all.
+    """One story, folded to its subheading where the app supports it. A story
+    with nothing under its subheading is a plain line.
     """
     label = html.escape(_story_label(story))
     body = _paragraphs_to_html((story.get("detail") or "").strip()) + _sources_html(
@@ -1597,9 +1447,7 @@ def build_html(topic_results, date_str, fact=None, collapsible=False):
         ink = _topic_ink(index)
         degraded = bool(brief.get("degraded"))
 
-        # The topic's own summary sits directly under its name, before any
-        # story. A reader who stops here should still have the gist, so it
-        # gets a little more weight than the body copy below it.
+        # The overview comes first and is set a little larger than the stories.
         if degraded:
             overview_html = (
                 f'<p style="font-size:14px;color:{_TEXT_MUTED};line-height:1.6;'
@@ -1680,8 +1528,7 @@ def build_html(topic_results, date_str, fact=None, collapsible=False):
     )
 
     preheader = html.escape(_build_preheader(topic_results))
-    # Padding so Gmail/Outlook stop pulling trailing body text into the
-    # inbox preview once the real preheader text runs out.
+    # Stops Gmail and Outlook filling the rest of the preview with body text.
     preheader_pad = "&#8203;&nbsp;" * 120
 
     return _compact_html(f"""
@@ -1733,30 +1580,23 @@ def build_html(topic_results, date_str, fact=None, collapsible=False):
     """)
 
 
-# Gmail stops rendering at about 102KB of HTML and hides the rest behind a
-# "View entire message" link. That link still shows everything, so a long
-# digest is never lost, but the reader has to go and get it. Warn a little
-# early instead of at the cliff.
+# Gmail hides HTML past about 102KB behind "View entire message". Warn a
+# little before that.
 GMAIL_CLIP_BYTES = 102 * 1024
 GMAIL_WARN_BYTES = 92 * 1024
 
 
 def _compact_html(markup):
+    """Collapse the templates' whitespace. Rendering ignores it, and removing it
+    saves room under Gmail's size limit.
     """
-    Squeeze the layout whitespace out of the templates above. HTML collapses
-    runs of whitespace when rendering anyway, so this changes nothing a
-    reader sees, and it buys back a meaningful share of the Gmail budget on
-    a digest with a lot of topics.
-    """
-    # Collapse each run of whitespace to a single space rather than removing
-    # it. Stripping the gap between tags outright would also eat the real
-    # space in constructions like "</a> <span>(Outlet)</span>", which the
-    # reader does see.
+    # Replace each run with one space. Some spaces between tags are visible, as
+    # in "</a> (Outlet)".
     return re.sub(r"\s+", " ", markup).strip()
 
 
 def check_email_size(html_body):
-    """Log how much of Gmail's clipping budget this digest uses."""
+    """Log how much of Gmail's size limit this email uses."""
     size = len(html_body.encode("utf-8"))
     pct = size / GMAIL_CLIP_BYTES * 100
     print(f"Email is {size / 1024:.0f}KB ({pct:.0f}% of Gmail's clipping limit)")
@@ -1772,25 +1612,18 @@ def check_email_size(html_body):
 
 
 # ---------------------------------------------------------------------------
-# Collapsible version (AMP for Email)
+# AMP version for Gmail
 # ---------------------------------------------------------------------------
 #
-# Gmail has no way to collapse part of an ordinary HTML email. It rewrites
-# <details> and <summary> into plain tags, and it doesn't support the
-# :checked selector that CSS-only tricks depend on. AMP for Email is the one
-# format where it can, through amp-accordion, so the digest also carries an
-# AMP copy in which each story shows only its one-line subheading until it's
-# tapped. Gmail shows that copy. Every other client, and Gmail itself once a
-# message is 30 days old, shows the full HTML version instead, so a story is
-# never hidden anywhere it can't be opened.
+# Gmail can't fold ordinary HTML, but it folds AMP for Email built with
+# amp-accordion. This copy shows each story as its subheading until tapped.
+# Other apps, and Gmail after 30 days, show the regular HTML email.
 
-# The AMP spec's ceiling for the whole document. Gmail ignores an AMP part
-# past it, so a digest that large is sent as the full version only.
+# AMP's size limit. Gmail ignores a larger AMP part, so one isn't sent.
 AMP_MAX_BYTES = 200_000
 
 def _amp_ink_css():
-    """Per-topic ink rules. A topic's wrapper carries its ink class, and
-    these colour its name, toggle, links and index mark."""
+    """CSS for each topic colour. A topic's wrapper carries its ink class."""
     rules = ""
     for i, ink in enumerate(_TOPIC_INKS):
         rules += (
@@ -1801,10 +1634,8 @@ def _amp_ink_css():
     return rules
 
 
-# Class-based rather than inline like the HTML version: AMP allows a
-# stylesheet, and one set of rules is far smaller than repeating them on
-# every element. The palette and type are shared, so both versions look the
-# same.
+# The AMP copy uses one stylesheet. It shares the HTML version's palette and
+# fonts.
 _AMP_CSS = f"""
 body {{ margin:0; padding:0; background:{_PAGE_BG}; font-family:{_FONT_STACK}; color:{_TEXT_BODY}; }}
 .wrap {{ max-width:640px; margin:0 auto; padding:24px 10px; }}
@@ -1888,9 +1719,9 @@ def _amp_sources(sources, label="Sources"):
 
 
 def _amp_strip(summary):
-    """The masthead strip for the AMP copy. Segment widths change every day,
-    so they're written as rules appended to this email's stylesheet rather
-    than as inline styles."""
+    """The topic bar for the AMP copy. The widths change every day, so they're
+    added to this email's stylesheet.
+    """
     topics = [t for t in summary["topics"] if t["count"]]
     total = sum(t["count"] for t in topics)
     if not total:
@@ -1916,10 +1747,8 @@ def _amp_index(summary):
 
 
 def _story_label(story):
-    """
-    The one line a collapsed story shows. Normally that's the subheading. A
-    story that came back without one falls back to its opening sentence, so
-    there's still something meaningful to tap.
+    """The line a folded story shows: its subheading, or its first sentence if it
+    has none.
     """
     subheading = (story.get("subheading") or "").strip()
     if subheading:
@@ -1932,11 +1761,9 @@ def _story_label(story):
 
 
 def build_amp(topic_results, date_str, fact=None):
-    """
-    The collapsible copy of the digest. Same content as build_html(): every
-    subheading, paragraph and source is here too, with each story's detail
-    and sources folded under its subheading. The topic overviews and the
-    fact stay open, since they're what a quick read is for.
+    """The AMP version of the email, with the same content as build_html().
+    Each story's text and sources fold under its subheading. Overviews and the
+    fact stay open.
     """
     summary = _digest_summary(topic_results, fact, collapsible=True)
     sections = []
@@ -1950,8 +1777,7 @@ def build_amp(topic_results, date_str, fact=None):
             continue
 
         if brief.get("degraded"):
-            # The headline fallback is already one line per story with
-            # nothing further to open, so it's listed as it is.
+            # A headline list has nothing to fold.
             inner = (
                 '<p class="note">No summary was available for this topic this run, '
                 "so the latest stories are listed directly.</p>"
@@ -2006,7 +1832,7 @@ def build_amp(topic_results, date_str, fact=None):
     if fact:
         why = f'<p class="fact-why">{html.escape(fact["why"])}</p>' if fact.get("why") else ""
         fact_html = (
-            f'<div class="fact"><div class="label">One thing worth knowing &middot; '
+            f'<div class="fact"><div class="label">Fact of the day &middot;'
             f'{html.escape(fact["field"])}</div>'
             f'<p class="fact-text">{html.escape(fact["fact"])}</p>{why}</div>'
         )
@@ -2041,8 +1867,7 @@ def build_amp(topic_results, date_str, fact=None):
 
 def send_email(subject, html_body, amp_body=None):
     sender = os.environ["GMAIL_ADDRESS"].strip()
-    # App passwords are often copied with spaces. Gmail accepts them either
-    # way, but stripping avoids paste mistakes.
+    # App Passwords are often pasted with spaces in them.
     app_password = os.environ["GMAIL_APP_PASSWORD"].replace(" ", "")
     recipient = os.environ.get("RECIPIENT_EMAIL", sender).strip() or sender
 
@@ -2060,8 +1885,7 @@ def send_email(subject, html_body, amp_body=None):
     msg["To"] = recipient
 
     if amp_body and sender.lower() == recipient.lower():
-        # Gmail only renders the AMP part when From and To differ, so on a
-        # send-to-self it would just be dead weight in the message.
+        # Gmail ignores the AMP part when From and To are the same address.
         print(
             "  [warn] collapsible stories need RECIPIENT_EMAIL to be a different "
             "address from GMAIL_ADDRESS, or Gmail won't show them. Sending the "
@@ -2070,8 +1894,8 @@ def send_email(subject, html_body, amp_body=None):
         )
         amp_body = None
 
-    # Order matters. A client shows the last part it can render, so the full
-    # HTML goes last for everyone else, and Gmail wants the AMP part ahead of it.
+    # Clients show the last part they support, so HTML goes last. Gmail expects
+    # the AMP part before it.
     if amp_body:
         msg.attach(MIMEText(amp_body, "x-amp-html", "utf-8"))
     msg.attach(MIMEText(html_body, "html", "utf-8"))
@@ -2088,8 +1912,7 @@ def main():
         print(f"ERROR: missing required env vars: {', '.join(missing)}", file=sys.stderr)
         sys.exit(1)
 
-    # Either provider alone is enough to write the briefs, so require one
-    # rather than Gemini specifically.
+    # Either provider can write the briefings.
     if not (GEMINI_API_KEY or GROQ_API_KEY):
         print(
             "ERROR: set GEMINI_API_KEY, GROQ_API_KEY, or both. Neither is set, "
@@ -2098,9 +1921,8 @@ def main():
         )
         sys.exit(1)
 
-    # A key alone isn't enough if its model list was overridden to nothing.
-    # Caught here, the run stops with a reason instead of crashing on the
-    # first topic after every feed has already been fetched.
+    # A key with an empty model list would crash on the first topic, after every
+    # feed had already been fetched.
     if not build_model_chain():
         print(
             "ERROR: a provider key is set but it has no models to call. Check "
@@ -2125,7 +1947,7 @@ def main():
     start_budget()
     for topic in config["topics"]:
         name = topic.get("name") or "Untitled"
-        # How many distinct developments to fold into the single topic brief.
+        # Most stories in this topic's briefing.
         max_developments = topic.get("max_stories", 5)
         print(f"Fetching articles for topic: {name}")
         try:
@@ -2138,9 +1960,7 @@ def main():
         print(f"  found {len(articles)} raw articles (capped at {MAX_ARTICLES_PER_TOPIC})")
 
         if not articles:
-            # Genuinely no new articles in the lookback window. Not a
-            # failure, so no note, and no mention in the email's failure
-            # notice below.
+            # No new articles. That isn't a failure, so the email gets no notice.
             topic_results.append((name, None, None))
             continue
 
@@ -2160,8 +1980,7 @@ def main():
                 print(f"  average sentence length: {avg:.0f} words{flag}")
             topic_results.append((name, brief, None))
         else:
-            # Nothing summarized, but the articles are in hand, so send the
-            # headlines rather than an empty slot where the topic should be.
+            # No briefing, so list the headlines that were fetched.
             fallback = headlines_only_brief(articles, max_developments)
             if fallback:
                 n_headlines = len(fallback["stories"][0]["sources"])
@@ -2171,7 +1990,7 @@ def main():
                 print("  got no briefing")
                 topic_results.append((name, None, "no summary came back this run"))
 
-        # Be gentle on free-tier rate limits across topics.
+        # Pause between topics for the free tier's rate limits.
         time.sleep(2)
 
     if not any(brief for _, brief, _ in topic_results):
@@ -2183,8 +2002,8 @@ def main():
 
     now_local = datetime.now(local_tz)
 
-    # After the topics, so a bad day for the API costs the fact rather than
-    # a topic. A failure here just leaves the block out of the email.
+    # The fact comes last so the topics use the time budget first. If it fails,
+    # the email goes out without it.
     fact = None
     if settings.get("fact_of_the_day", True):
         try:
@@ -2195,8 +2014,7 @@ def main():
             print(f"  got a fact from {fact['field']}")
 
     date_str = now_local.strftime("%A, %d %B %Y")
-    # One setting covers both ways of collapsing: the AMP copy for Gmail, and
-    # the checkbox version inside the regular email for everything else.
+    # One setting controls the AMP copy and the checkbox folding.
     collapsible = settings.get("collapsible_stories", True)
     html_body = build_html(topic_results, date_str, fact, collapsible=collapsible)
     subject = f"{subject_prefix} - {date_str}"

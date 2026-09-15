@@ -1,10 +1,7 @@
-"""
-Shared fixtures for the digest tests.
+"""Shared fixtures for the tests.
 
-Nothing in the suite touches the network, sleeps for real, or needs real
-credentials. HTTP, SMTP and the clock are all replaced with fakes, and any
-test that reaches for the real network fails loudly rather than quietly
-getting an empty result back.
+No test uses the network, sleeps, or needs credentials. HTTP, SMTP and the
+clock are faked, and a test that tries to reach the network fails.
 """
 
 import json

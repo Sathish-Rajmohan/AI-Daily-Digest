@@ -1,149 +1,99 @@
 # How it works
 
-Background on the decisions behind the digest. None of this is needed to run
-it; [the README](README.md) covers setup. This is here for when you want to
-change something and would rather know why it is the way it is.
+Background on why the digest works the way it does. None of it is needed for
+setup, which the [README](README.md) covers.
 
 - [How articles are chosen](#how-articles-are-chosen)
 - [How the writing is kept readable](#how-the-writing-is-kept-readable)
 - [The fact of the day](#the-fact-of-the-day)
-- [What happens when a model is down](#what-happens-when-a-model-is-down)
-- [How long the email can get](#how-long-the-email-can-get)
+- [When a model is down](#when-a-model-is-down)
+- [How the email looks](#how-the-email-looks)
+- [Email length and Gmail clipping](#email-length-and-gmail-clipping)
 - [Collapsible stories](#collapsible-stories)
-- [Swapping or adding an LLM](#swapping-or-adding-an-llm)
-
----
+- [Why citations can't be faked](#why-citations-cant-be-faked)
 
 ## How articles are chosen
 
-A busy topic finds far more articles than fit in one prompt. International
-News pulls over 400 in a normal 24 hours against a cap of 100, so what gets
-dropped matters more than the cap does.
+A busy topic finds far more articles than one prompt can hold. On a normal day
+International News collects over 400, and the limit is 100.
 
-Articles are taken **one from each feed in turn**, freshest first within a
-feed, rather than sorting everything by time and cutting at the cap. Sorting
-by time loses whole outlets: a wire publishing every few minutes fills the
-list, and a story the rest of the world led with falls off the end. Measured
-on one day's articles:
+The script takes one article from each feed in turn, newest first within each
+feed, until it reaches the limit. The first version sorted everything by time
+and cut at the limit. That lost whole outlets, because a wire service posting
+every few minutes filled the list. On the same day's articles:
 
-| | Outlets represented | Spread |
+| Method | Outlets included | Spread |
 |---|---|---|
-| By time, cap 40 | 11 | 9 from one outlet, 1 from the BBC |
-| Round robin, cap 100 | 17 | 5-6 from every outlet |
+| Newest first, limit 40 | 11 | 9 from one outlet, 1 from the BBC |
+| One per feed in turn, limit 100 | 17 | 5 or 6 from every outlet |
 
-A major story is precisely the one several outlets all cover, so spreading
-the list across outlets is what protects against missing one. The prompt says
-this explicitly, so repeated coverage reads as a significance signal rather
-than duplication to collapse.
+Big stories are the ones many outlets cover, so keeping every outlet in the
+list is the best protection against missing one. The prompt tells the model to
+read coverage by several outlets as a sign that a story matters.
 
-Two consequences worth knowing:
-
-- **Adding feeds is cheap.** A new feed takes a share of the slots instead of
-  a high-volume one taking over.
-- **Feeds are fetched in parallel.** Sequentially, 75 feeds against the
-  per-host timeout put the worst case at 25 minutes, which is the whole job
-  budget spent before anything is summarized. The dedup still runs in a fixed
-  order, so the same inputs give the same digest.
-
----
+Feeds are fetched in parallel. One at a time, 75 feeds that all timed out would
+take about 25 minutes. The results are still handled in the order the feeds
+are listed, so the same article showing up in two feeds is resolved the same
+way on every run.
 
 ## How the writing is kept readable
 
-The prose targets ordinary general-audience readability: sentences averaging
-15-20 words and never past 25, active voice, everyday vocabulary, at most one
-subordinate clause per sentence, and the point at the start of each paragraph
-rather than the end.
+The briefing prompt sets limits that can be checked afterwards. Sentences
+should average 15 to 20 words and stay under 25. The model is also asked for
+the active voice, everyday words, at most one subordinate clause in a sentence,
+and paragraphs that open with their main point.
 
-Those are written into the system instruction as numbered limits rather than
-adjectives. "Keep it readable" and "average about 15-20 words" are not
-equally followable, and only one of them can be checked afterwards.
+Dense writing was the main problem, so the prompt ends with an example. One
+36-word sentence carrying three ideas sits next to the same content written as
+three sentences averaging 16 words. A test checks both word counts. If the
+example broke its own rule, the model would copy the mistake.
 
-The instruction ends with a worked before-and-after contrasting one dense
-36-word sentence against the same content as three short ones. Density is the
-specific failure mode here, and it is the one plain instructions are worst at
-preventing on their own.
+Each run logs the average sentence length for every topic and flags anything
+over 22 words.
 
-Both halves of that example are labelled with their own word counts, and both
-labels are true: the dense version really is 36 words, and the rewrite really
-averages 16, inside the 15-20 band the rules ask for. An example that misses
-the target it illustrates teaches the miss, so the counts are checked rather
-than asserted.
-
-Each run prints the average sentence length it actually got, per topic. If
-that starts reporting above 22 words, the instruction has stopped landing and
-you will see it in the Actions log rather than having to notice it by reading.
-
-### Structure
-
-Each topic renders as an overview of the day, then a subheading per
-development with its detail and its own sources beneath it. Articles covering
-the same event are fused into one entry.
-
-`max_stories` caps how many developments get their own subheading. It is a
-ceiling, not a target: same-event articles still collapse into one entry, so
-a quiet day produces fewer entries rather than padded ones.
-
----
+Every topic has a short overview, then one subheading per story. Articles about
+the same event become a single story. `max_stories` is an upper limit, and
+quiet days have fewer stories.
 
 ## The fact of the day
 
-Above the news, each email opens with one fun fact and a short answer to "how
-come?". It's meant to take about ten seconds and make sense on the first
-read.
+Each email opens with a fun fact and a short answer to "how come?". It should
+take about ten seconds to read.
 
-The prompt is built from what makes a fact land and stay with someone:
+The prompt is based on research into what makes facts stick. George
+Loewenstein's information-gap theory describes curiosity as a response to a
+gap in something you partly know, so the fact should be a surprise about
+something familiar. It should be one concrete idea the reader can picture.
+Plain-language guidance aims general writing at an 8th-grade reading level, and
+the prompt asks for something a 12-year-old could follow, with no technical
+terms. Numbers are rounded and paired with a familiar comparison. Barrio,
+Goldstein and Hofman (2016) found that comparisons like these help readers
+remember numbers they see in the news.
 
-- **Surprise on something familiar.** Curiosity comes from a gap in something
-  you half know. A twist on an everyday thing opens that gap; a fact about
-  something you've never heard of doesn't.
-- **Concrete, and one idea.** Something you can picture, like an object, an
-  animal or a number. No abstract mechanisms, theories or policy.
-- **Plain words.** Plain-language guidance puts writing for a general
-  audience at about an 8th-grade reading level, so the prompt asks for
-  something a curious 12-year-old could follow. Technical terms and the
-  names of concepts are left out, not explained.
-- **Numbers beside a comparison.** People recall and estimate figures
-  substantially better when they come with a familiar comparison, and round
-  numbers are easier to hold than exact ones.
-- **Hard word limits.** The fact is one sentence of 25 words or fewer, and the
-  explanation two or three short sentences of 40 words or fewer. Each run
-  logs both counts and warns when either limit is broken.
+The fact is capped at 25 words and the explanation at 40. Each run logs both
+counts and warns when either goes over.
 
-The prompt ends with a worked example: a real fact this digest once sent (79
-words, "zero lower bound", three ideas stacked into it) beside a rewrite of
-the same idea in 48 plain words. A test checks both word counts, and checks
-that the rewrite scores at or below an 8th-grade reading level while the
-original scores well above it.
+The prompt also shows a fact the digest sent before these rules existed. It
+was 79 words long, used the phrase "zero lower bound" and packed in three
+ideas. Next to it is the same fact rewritten in 48 plain words. Tests check the
+word counts and give the two versions a reading-level score.
 
-A model left to choose freely also returns to the same handful of chestnuts,
-so the request is narrowed on two axes. The date picks one of fourteen
-fields and, separately, one of eleven everyday angles: a number that sounds
-wrong but is true, an accident that led to something people use, a word with
-a surprising origin, and so on. Eleven and fourteen share no factors, so a
-field-and-angle pair doesn't come back for 154 days. An earlier set of
-angles asked for things like "a hard limit, and what sets it", which invited
-exactly the dense, abstract facts this replaced. The model can drop an angle
-rather than force a bad match to it.
+Left to choose freely, a model keeps returning to a few famous facts. The date
+picks one of fourteen subjects and, separately, one of eleven everyday angles,
+such as "a number that sounds wrong but is true". Eleven and fourteen have no
+common factor, so each pairing comes back every 154 days. The model can drop an
+angle that doesn't suit the subject.
 
-This is the only part of the email not grounded in a fetched article. It
-carries no sources because it comes from the model's own knowledge rather
-than today's feeds. Treat it as a prompt to go and read about something, not
-as a citation.
+The fact is the only part of the email that doesn't come from the day's
+articles, so it has no sources. It's written after all the topics, so
+if the model budget runs out, the fact is what gets skipped. Set
+`fact_of_the_day` to `false` to turn it off.
 
-It runs after the topics, so on a bad day for the API you lose the fact
-rather than a topic, and a failure just leaves the block out. Set
-`fact_of_the_day` to `false` in `settings` to turn it off.
+## When a model is down
 
----
-
-## What happens when a model is down
-
-A 503 from Gemini means that model's shared serving pool is out of capacity.
-Free and paid traffic hit the same pool, so it is not something a billing or
-quota change fixes, and asking the same model again usually returns the same
-503.
-
-So the script does not wait longer, it asks something else. It walks a chain:
+A 503 from Gemini means that model has run out of capacity for everyone, paid
+and free. Asking again usually gets another 503, so the script moves to a
+different model. It works down this list:
 
 ```
 gemini-flash-latest
@@ -154,219 +104,135 @@ groq/openai/gpt-oss-120b          only if GROQ_API_KEY is set
 groq/llama-3.3-70b-versatile
 ```
 
-Three jittered exponential attempts per model, then down to the next. Every
-Gemini model runs on Google's infrastructure, so Groq is there as the
-non-Google backstop for the case where the problem is Google-wide rather than
-model-specific. It is only reached once every Gemini model has failed, which
-keeps the digest's voice consistent on normal days. On a day it does get
-used, expect the writing to read noticeably different.
+Each model gets three attempts, with a short randomised wait between them.
+Groq comes last because it's the only option outside Google, which matters when
+the whole of Google is having trouble.
 
-Other behaviour worth knowing:
+Other failures:
 
-- **401/403** is credentials, not capacity, so that provider is dropped for
-  the rest of the run instead of retried. A dead Gemini key degrades to Groq.
-- **404** means the model name is wrong for your key. It is dropped after one
-  try, so an outdated entry in the chain costs a fraction of a second.
-- **`Retry-After`** is honoured when sent, capped so one response cannot
-  swallow the run.
-- **A total outage** still sends the email. Each topic falls back to a plain
-  list of headlines under a "Top headlines" label, built from the articles
-  already fetched, rather than dropping out.
-- **One shared 8-minute budget** covers all summarization. A broad outage
-  means a short run that sends headlines, not a run that hits the 25-minute
-  workflow timeout and sends nothing.
+- A 401 or 403 means the key was rejected, and that provider is skipped for the
+  rest of the run.
+- A 404 means the model name is wrong, and that model is skipped after one try.
+- A `Retry-After` header is followed, up to 60 seconds.
+- A reply that cuts off partway through its JSON is thrown away and the next
+  model is asked.
+- If no model answers, each topic lists its latest headlines and the email
+  still goes out.
 
-Groq is sent a shorter article list than Gemini because its free tier meters
-tokens per minute rather than per request, and a hundred articles would spend
-most of a minute's allowance on one topic.
+All model calls share one 8-minute budget. When a wide outage uses it up, the
+run ends early and sends headlines. Without it, a run could keep retrying until
+the 25-minute workflow timeout and send nothing.
+
+Groq only gets the first 45 articles of a topic. Its free tier limits tokens
+per minute, and a full list of 100 would use most of a minute's allowance on
+one topic.
 
 ### Why these models
 
-The Gemini free tier is Flash-only; Pro moved behind billing in 2026, so
-there is no free upgrade above what the chain already uses. For condensing
-short article snippets into cited paragraphs this is the right class of model
-anyway. It is a read-and-compress job, not a reasoning one, and a larger model
-buys better prose rather than a better digest.
+Gemini's free tier only includes the Flash models. Condensing short article
+summaries into a briefing is well within what they do reliably.
 
-No request sets `temperature`, `top_p` or `top_k`. Every model in the chain
-is a Gemini 3.x, and Google's guidance for that generation is to drop the
-sampling parameters entirely and steer with the system instruction instead;
-these models are tuned around their defaults, and a low temperature is the
-documented cause of looping and degraded output. Looping also happens to be
-how they fail structured output, by repeating until the token limit cuts the
-JSON off mid-string. Groq's gpt-oss wants its default of 1.0 for the same
-reason, so leaving the parameter off suits both providers.
+No request sets `temperature`, `top_p` or `top_k`. Google advises leaving these
+at their defaults for Gemini 3 models, and a low temperature can make them
+repeat themselves until the output is cut off. Groq's gpt-oss also expects its
+default settings. With sampling left alone, the fact's rotation through
+subjects and angles is what keeps it from repeating.
 
-That puts the whole job of producing a different fact each day on the prompt
-rather than on the sampler, which is why the fact rotates on two axes rather
-than one.
+The JSON schema the model fills in is kept shallow, since Flash models are
+unreliable with deeply nested schemas. `maxOutputTokens` is set high because
+running out of tokens cuts the JSON off without an error.
 
-The schema is kept deliberately shallow for the same reason the chain exists:
-Flash-class models get unreliable on deeply nested schemas, and Google's docs
-warn that large or deeply nested schemas may be rejected outright.
-`article_ids` is a flat list of integers rather than a list of one-field
-objects, so the output carries more structure than the old shape while
-nesting one level less. `maxOutputTokens` is set explicitly because these
-models fail structured output by truncating mid-JSON rather than erroring.
+## How the email looks
 
----
+Each topic has its own colour: teal, oxblood, indigo, moss, ochre or plum,
+chosen by the topic's position in `topics.json`. The colour is used for the
+topic's name, its links and its "Read more" label, which helps on a long
+scroll.
 
-## How long the email can get
+Under the title, a line gives the day's totals, for example "39 stories from
+67 outlets · about 4 min to skim". Below that, a thin bar is split into the
+topic colours by each topic's share of the stories, with a key underneath.
+These numbers are all counted from the email itself.
 
-Gmail renders about 102KB of HTML and hides the rest behind a "View entire
-message" link. That link still shows everything, but it takes a click. Each
-run prints the size it used.
+The title, topic names and the fact use Georgia, a serif font every mail app
+has. Everything else uses the reader's standard sans-serif font. Gmail and
+Outlook ignore web fonts, so the email doesn't use any.
 
-| Config | Stories | Size, stories folded | |
+Styles are written on each element because Gmail's apps drop `<style>` blocks
+when the account isn't a Gmail account. The layout uses tables for Outlook on
+Windows. There's only a light version: Gmail's apps invert colours in dark mode
+regardless of the email's code, and pure black and white invert worst, so the
+palette avoids them. Every text colour meets WCAG AA contrast, and a test checks
+this.
+
+## Email length and Gmail clipping
+
+Gmail shows about the first 102KB of an email's HTML and puts the rest behind a
+"View entire message" link. Each run's log reports the size and warns above
+92KB.
+
+| Topics | Stories | Size with stories folded | In Gmail |
 |---|---|---|---|
-| stock, as shipped | 39 | ~89KB | 87% of the budget |
-| 5 topics x 6 | 30 | ~70KB | fine |
-| 8 topics x 6 | 48 | ~110KB | Gmail clips it |
-| 10 topics x 8 | 80 | ~178KB | Gmail clips it |
+| The five that ship | 39 | ~89KB | Fits (87%) |
+| 5 topics of 6 stories | 30 | ~70KB | Fits |
+| 8 topics of 6 stories | 48 | ~110KB | Clipped |
+| 10 topics of 8 stories | 80 | ~178KB | Clipped |
 
-Those figures use deliberately heavy test content: every story at full
-length with three sources, and every topic at its `max_stories` ceiling.
-Real days usually come in smaller. Folding costs some bytes per story, so
-the same digest with `collapsible_stories` off is about a sixth smaller. The
-AMP copy has its own, much larger 200KB allowance and isn't the constraint.
+These sizes use heavy test content, with every topic at its limit and every
+story long with three sources. Real days are usually smaller. With
+`collapsible_stories` off, the same email is about a sixth smaller. The AMP
+version for Gmail has its own 200KB limit and stays well under it.
 
-Past the limit, drop `max_stories`, turn off `collapsible_stories`, or split
-the topics across two runs by adding a second workflow with its own
-`topics.json`.
-
-Styling is inline rather than in a `<style>` block because Gmail strips those
-for non-Gmail recipients, and the layout is table-based because Outlook
-renders mail with the Word engine. The email is deliberately light-only:
-Gmail's mobile apps invert colours in dark mode regardless of any CSS, so the
-palette avoids pure black and white, which invert worst.
-
-### The look
-
-The design stays minimal and puts its character in things that carry
-information:
-
-- **An ink per topic.** Each topic gets a deep, muted colour (teal, oxblood,
-  indigo, moss, ochre, plum) for its name, its links and its "Read more"
-  cue, assigned by its position in `topics.json` so it stays the same day to
-  day. On a long scroll that tells you which section you're in.
-- **A masthead that counts.** Under the title sits a line like "39 stories
-  from 67 outlets · about 4 min to skim", then a thin strip split into the
-  topic inks, each segment sized by that topic's share of the day's stories,
-  with a key beneath it. Every figure is counted from that email.
-- **Two typefaces with jobs.** Georgia, the one serif every mail app has, for
-  the title, the topic names and the fact; the system sans for everything
-  you read at length. Web fonts are out, since Gmail and Outlook ignore them.
-- **The fact set as a statement.** Large serif type rather than a boxed
-  card, so it reads as the thing worth pausing on.
-
-Every text colour clears WCAG AA contrast against the card, and a test holds
-that. Font names in the stacks are single-quoted: a double quote inside a
-double-quoted `style` attribute ends the attribute early and silently drops
-the whole font declaration, which an earlier version did, so every client
-fell back to its default font. A test checks for that too.
-
----
+The [README](README.md#how-many-topics-you-can-have) lists ways to stay under
+the limit.
 
 ## Collapsible stories
 
-No single technique folds an email in every mail app, so the digest layers
-two, and each app gets whichever one it supports. Where neither works,
-stories are shown in full.
+No one technique folds stories in every mail app, so the email uses two. Apps
+that support neither show every story open.
 
-**AMP, for Gmail.** Gmail won't fold ordinary HTML. It rewrites `<details>`
-and `<summary>` into plain tags and ignores the `:checked` selector. The one
-format it will fold is AMP for Email, so each digest also carries an AMP copy
-built with `amp-accordion`.
+Gmail won't fold ordinary HTML. It turns `<details>` and `<summary>` into plain
+tags and ignores the `:checked` selector. It does support AMP for Email, so each
+digest includes an AMP version built with `amp-accordion`. Gmail only shows it
+when the sender and recipient are different addresses and the recipient has
+approved the sender. If the addresses match, or the AMP version is over AMP's
+200KB limit, the script leaves it out and says so in the log.
 
-**A checkbox, for most other apps.** The regular HTML email folds each story
-with a hidden checkbox, a label that toggles it, and one CSS rule that hides
-the story body while the box is ticked. Two details mean an app that only
-half supports this can never hide a story for good:
+Other apps get a hidden checkbox in the regular email. The story's heading is a
+label for the checkbox, and a CSS rule hides the story while the box is ticked.
+The box starts ticked, and the rule only matches ticked boxes, so an app that
+doesn't support `:checked` shows every story open. The label wraps the
+checkbox instead of pointing to it by id. Some apps rename ids, and that would
+leave a story stuck closed.
 
-- The box starts ticked, and the only rule that hides anything requires
-  `input:checked`. An app that ignores `:checked` never matches it, so it
-  shows every story open. The obvious version, hidden by default and shown on
-  `:checked`, would lock every story shut in Gmail, which keeps `display:none`
-  but drops `:checked`.
-- The label wraps the checkbox rather than pointing at it by id. Some apps
-  rewrite ids, which would break the link and leave a story stuck closed.
-
-| App | What you get |
+| App | Stories |
 |---|---|
-| Gmail web and apps, with [the setup](README.md#7-collapsible-stories-in-gmail) | Folded (AMP), for 30 days after a digest arrives |
-| Apple Mail, iPhone and iPad Mail | Folded (checkbox) |
-| Yahoo Mail, Samsung Email, Thunderbird, Fastmail | Folded (checkbox) |
-| Outlook.com, Outlook for Mac, iOS and Android | Probably folded; they support the technique only partly |
-| Gmail without the setup, Outlook for Windows, Proton Mail, HEY | Every story in full |
+| Gmail on the web and in its apps, after [setup](README.md#7-collapsible-stories-in-gmail) | Folded (AMP) for 30 days after arrival |
+| Apple Mail on Mac, iPhone and iPad | Folded |
+| Yahoo Mail, Samsung Email, Thunderbird, Fastmail | Folded |
+| Outlook.com and Outlook for Mac, iPhone and Android | Probably folded, support is partial |
+| Gmail without setup, Outlook for Windows, Proton Mail, HEY | Open |
 
-The support data comes from caniemail.com. The checkbox version was also
-tested in real Chromium and WebKit engines (WebKit is what Apple Mail
-renders with), at desktop and phone widths. Stories start folded, tapping a
-subheading opens and closes one, a source link opens without folding its
-story, and with the stylesheet removed every story is open. It hasn't been
-tried in each app on a real device, so if one you use misbehaves, set
-`collapsible_stories` to `false`.
+The table is based on [caniemail.com](https://www.caniemail.com) data. The
+checkbox version was tested in Chromium and in WebKit, the engine Apple Mail
+uses, at desktop and phone widths. It hasn't been tried in every app on a real
+device, so turn off `collapsible_stories` if one misbehaves.
 
-Because the label wraps the whole story, tapping a story's own text folds it
-again, the same as tapping its subheading. Links inside it work as normal.
+Tapping a story's text closes it, the same as tapping its heading. Links inside
+a story open as usual. Topic overviews and the fact never fold, and tests check
+that everything in the open version of the email is also in both folding
+versions.
 
-Both versions come from the same briefings, and tests check that every
-subheading, paragraph, source and link in the expanded email is also in each
-collapsible one. Topic overviews and the fact of the day are never folded.
+## Why citations can't be faked
 
-Gmail only renders the AMP copy when the sender and recipient are different
-addresses and the recipient has approved the sender, which is why the setup
-needs a second sending address. When the two addresses match, the AMP copy is
-left out and the log says so. It's also left out if it passes AMP's 200KB
-document limit, rather than being sent in a form Gmail would ignore.
+The model never sees a link. It gets numbered articles with a title, outlet and
+summary, and refers to them by number. The titles, links and outlet names
+under each story are looked up from the fetched articles by those numbers, so
+the model can't put a made-up URL in the email. A number that matches no
+article is dropped and logged.
 
-Gmail quietly falls back to the full version if the AMP copy breaks any of
-AMP's rules, so an invalid copy looks like the feature simply not working.
-The markup passes the official validator, and it's worth rerunning after any
-change to `build_amp()`: save a generated copy to a file and run
-`npx amphtml-validator --html_format AMP4EMAIL <file>`. AMP also rejects inline
-`style` attributes in favour of one stylesheet, so this copy uses classes
-where the HTML copy uses inline styles, with the same palette.
-
----
-
-## Swapping or adding an LLM
-
-`summarize_topic()` in `digest.py` walks the chain from `build_model_chain()`
-and returns `None` or:
-
-```python
-{
-  "overview": "2-3 sentences on the topic as a whole",
-  "stories": [
-    {"subheading": "...", "detail": "...",
-     "sources": [{"title": "...", "link": "...", "outlet": "..."}]}
-  ],
-}
-```
-
-To add a provider, write a `_yourprovider_request(model, prompt, system,
-schema)` returning `(url, headers, body)` and a `_yourprovider_extract(data,
-label)` returning the model's raw JSON text, register both in `_PROVIDERS`,
-and add its models in `build_model_chain()`.
-
-Retries, backoff, the shared time budget and the citation resolution are all
-provider-agnostic, so there is nothing else to touch. Anything speaking the
-OpenAI chat-completions format can copy the Groq pair almost verbatim.
-`BRIEF_SCHEMA` is written in Gemini's schema dialect and converted to plain
-JSON Schema by `_to_json_schema()`, so only one definition needs to stay
-correct.
-
-### Why citations can't be faked
-
-The model never sees a link. It gets numbered articles with a title, outlet
-and snippet, and cites by integer id. The title, link and outlet in the email
-are looked up from the fetched articles by that id, so nothing the model
-writes ends up in a URL. An id it invents resolves to nothing and is dropped
-with a warning in the log.
-
-The links themselves come from the feeds, so they get checked too. Only
-absolute `http` and `https` links become clickable; a `javascript:` or
-`data:` link, or a relative one that would lead nowhere from an inbox, is
-dropped and the headline is listed without a link. Feed text is also fenced
-off in the prompt so a headline can't pass itself off as an instruction.
+Links from feeds are checked too. Only full `http` and `https` links become
+clickable, and anything else, such as a `javascript:` or relative link, is
+shown as plain text. In the prompt, the article list sits inside a tag with
+any angle brackets in headlines escaped, so text from a feed can't pass itself
+off as an instruction.

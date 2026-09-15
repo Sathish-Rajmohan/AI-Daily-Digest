@@ -116,7 +116,7 @@ def test_collapsible_version_has_one_checkbox_per_story():
 
 
 # --------------------------------------------------------------------------
-# The safety rules that stop anything being lost
+# Stories can't get stuck hidden
 # --------------------------------------------------------------------------
 
 def test_every_hiding_rule_depends_on_checked():
@@ -177,8 +177,8 @@ def test_an_app_that_ignores_the_stylesheet_shows_every_story_in_full():
             assert para in visible
         for s in story["sources"]:
             assert s["title"] in visible
-    # The only thing such an app hides is the "+ Read more" cue, which would
-    # be wrong to show on a story that's already fully open.
+    # An app without the stylesheet only hides the "+ Read more" label, since
+    # every story is already open there.
     assert parsed.hidden
     assert all("Read\xa0more" in h for h in parsed.hidden), parsed.hidden
 

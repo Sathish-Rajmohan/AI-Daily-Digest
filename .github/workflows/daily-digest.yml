@@ -2,11 +2,8 @@ name: Daily News Digest
 
 on:
   schedule:
-    # 8:00 AM Australia/Sydney every day. GitHub Actions cron runs in UTC
-    # by default. The timezone field below is an IANA zone, so GitHub keeps
-    # the wall-clock time at 8 AM through the AEST/AEDT switch on its own.
-    # Running exactly on the hour would normally risk load spikes, but this
-    # workflow is short and low traffic, so :00 is fine here.
+    # 8:00 AM in Sydney every day. Cron uses UTC unless a timezone is set,
+    # and with one set GitHub keeps the local time across daylight saving.
     - cron: "0 8 * * *"
       timezone: "Australia/Sydney"
   workflow_dispatch: {}   # manual run from the Actions tab
@@ -14,13 +11,9 @@ on:
 jobs:
   send-digest:
     runs-on: ubuntu-latest
-    # Upper bound on a run. Feeds are fetched in parallel with a per-host
-    # timeout, which holds the worst case for all 75 of them to about four
-    # minutes, and all summarization shares one wall-clock budget
-    # (TOTAL_BUDGET, 8 minutes) that no combination of retries can exceed.
-    # 25 minutes gives both room to breathe while still being a backstop
-    # against the default 360-minute job cap, so a stuck run can't quietly
-    # eat the whole day and skip the email.
+    # A worst-case run takes about 20 minutes: every feed timing out, the
+    # full 8-minute model budget (TOTAL_BUDGET), then sending. This limit
+    # stops a stuck run long before GitHub's default of 6 hours.
     timeout-minutes: 25
     steps:
       - name: Check out repo

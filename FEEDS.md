@@ -1,27 +1,20 @@
 # Feed catalogue
 
-Every URL here was fetched and confirmed to return entries. Copy a block into
-the `topics` array in [topics.json](topics.json) and push.
+Ready-made topics to paste into the `topics` array in
+[topics.json](topics.json). Every feed URL returned entries when it was added.
 
-Two levels:
+[Broad topics](#broad-topics) cover a whole subject, like a section of a
+newspaper. [Niche topics](#niche-topics) cover one interest within a subject.
+You can use both, for example a `Sports` topic for general news and a
+`Sports: Soccer` topic for the league you follow.
 
-- **[Broad topics](#broad-topics)** cover a whole subject the way a newspaper
-  section would. Start here.
-- **[Niche topics](#niche-topics)** narrow to one interest inside a subject,
-  for when the broad version buries what you actually follow.
-
-You can mix them. A `Sports` topic and a `Sports / Soccer` topic can sit side
-by side, one for the general sweep and one for the thing you care about.
-
-For anything not listed, see [Finding feeds for your own
+If your subject isn't here, you can [find feeds for your own
 topic](#finding-feeds-for-your-own-topic).
-
----
 
 ## Broad topics
 
 <details>
-<summary><b>Sports</b> &mdash; 7 feeds</summary>
+<summary><b>Sports</b> (7 feeds)</summary>
 
 ```json
 {
@@ -41,7 +34,7 @@ topic](#finding-feeds-for-your-own-topic).
 </details>
 
 <details>
-<summary><b>Finance & Economics</b> &mdash; 6 feeds</summary>
+<summary><b>Finance & Economics</b> (6 feeds)</summary>
 
 ```json
 {
@@ -60,7 +53,7 @@ topic](#finding-feeds-for-your-own-topic).
 </details>
 
 <details>
-<summary><b>Climate & Energy</b> &mdash; 8 feeds</summary>
+<summary><b>Climate & Energy</b> (8 feeds)</summary>
 
 ```json
 {
@@ -81,7 +74,7 @@ topic](#finding-feeds-for-your-own-topic).
 </details>
 
 <details>
-<summary><b>Space & Astronomy</b> &mdash; 6 feeds</summary>
+<summary><b>Space & Astronomy</b> (6 feeds)</summary>
 
 ```json
 {
@@ -101,7 +94,7 @@ topic](#finding-feeds-for-your-own-topic).
 </details>
 
 <details>
-<summary><b>Cybersecurity</b> &mdash; 7 feeds</summary>
+<summary><b>Cybersecurity</b> (7 feeds)</summary>
 
 ```json
 {
@@ -121,7 +114,7 @@ topic](#finding-feeds-for-your-own-topic).
 </details>
 
 <details>
-<summary><b>Startups & Venture</b> &mdash; 6 feeds</summary>
+<summary><b>Startups & Venture</b> (6 feeds)</summary>
 
 ```json
 {
@@ -140,11 +133,10 @@ topic](#finding-feeds-for-your-own-topic).
 </details>
 
 <details>
-<summary><b>US Politics</b> &mdash; 10 feeds</summary>
+<summary><b>US Politics</b> (10 feeds)</summary>
 
-Deliberately spans the spectrum, since a digest built from one side of
-it reads as confirmation rather than information. Drop whichever you
-don't want.
+These come from across the political spectrum, so the digest doesn't only
+reflect one side. Remove any you don't want.
 
 ```json
 {
@@ -167,7 +159,7 @@ don't want.
 </details>
 
 <details>
-<summary><b>Gaming</b> &mdash; 7 feeds</summary>
+<summary><b>Gaming</b> (7 feeds)</summary>
 
 ```json
 {
@@ -187,7 +179,7 @@ don't want.
 </details>
 
 <details>
-<summary><b>Film & TV</b> &mdash; 6 feeds</summary>
+<summary><b>Film & TV</b> (6 feeds)</summary>
 
 ```json
 {
@@ -206,7 +198,7 @@ don't want.
 </details>
 
 <details>
-<summary><b>Music</b> &mdash; 6 feeds</summary>
+<summary><b>Music</b> (6 feeds)</summary>
 
 ```json
 {
@@ -225,7 +217,7 @@ don't want.
 </details>
 
 <details>
-<summary><b>Books & Ideas</b> &mdash; 8 feeds</summary>
+<summary><b>Books & Ideas</b> (8 feeds)</summary>
 
 ```json
 {
@@ -246,7 +238,7 @@ don't want.
 </details>
 
 <details>
-<summary><b>Crypto & Web3</b> &mdash; 4 feeds</summary>
+<summary><b>Crypto & Web3</b> (4 feeds)</summary>
 
 ```json
 {
@@ -263,7 +255,7 @@ don't want.
 </details>
 
 <details>
-<summary><b>Design & Architecture</b> &mdash; 4 feeds</summary>
+<summary><b>Design & Architecture</b> (4 feeds)</summary>
 
 ```json
 {
@@ -280,7 +272,7 @@ don't want.
 </details>
 
 <details>
-<summary><b>Cars & EVs</b> &mdash; 4 feeds</summary>
+<summary><b>Cars & EVs</b> (4 feeds)</summary>
 
 ```json
 {
@@ -297,7 +289,7 @@ don't want.
 </details>
 
 <details>
-<summary><b>Australia</b> &mdash; 5 feeds</summary>
+<summary><b>Australia</b> (5 feeds)</summary>
 
 ```json
 {
@@ -314,19 +306,14 @@ don't want.
 ```
 </details>
 
-
----
-
 ## Niche topics
 
-Narrower than the sections above. Useful when the broad topic keeps burying
-the thing you actually follow.
-
+Each of these covers one interest within a broader subject.
 
 ### Sports
 
 <details>
-<summary><b>Soccer</b> &mdash; European leagues, internationals, transfer news.</summary>
+<summary><b>Soccer</b>: European leagues, internationals, transfer news.</summary>
 
 ```json
 {
@@ -343,7 +330,7 @@ the thing you actually follow.
 </details>
 
 <details>
-<summary><b>Basketball (NBA)</b> &mdash; NBA news, trades and analysis.</summary>
+<summary><b>Basketball (NBA)</b>: NBA news, trades and analysis.</summary>
 
 ```json
 {
@@ -360,7 +347,7 @@ the thing you actually follow.
 </details>
 
 <details>
-<summary><b>NFL</b> &mdash; NFL news, injuries, analytics.</summary>
+<summary><b>NFL</b>: NFL news, injuries, analytics.</summary>
 
 ```json
 {
@@ -377,7 +364,7 @@ the thing you actually follow.
 </details>
 
 <details>
-<summary><b>Cricket</b> &mdash; Tests, ODIs, T20 and domestic.</summary>
+<summary><b>Cricket</b>: Tests, ODIs, T20 and domestic.</summary>
 
 ```json
 {
@@ -393,7 +380,7 @@ the thing you actually follow.
 </details>
 
 <details>
-<summary><b>Motorsport (F1)</b> &mdash; Formula 1 racing, technical and paddock coverage.</summary>
+<summary><b>Motorsport (F1)</b>: Formula 1 racing, technical and paddock coverage.</summary>
 
 ```json
 {
@@ -411,7 +398,7 @@ the thing you actually follow.
 </details>
 
 <details>
-<summary><b>Tennis</b> &mdash; Tours, majors and rankings.</summary>
+<summary><b>Tennis</b>: Tours, majors and rankings.</summary>
 
 ```json
 {
@@ -426,11 +413,10 @@ the thing you actually follow.
 ```
 </details>
 
-
 ### Tech
 
 <details>
-<summary><b>AI research</b> &mdash; Lab announcements and practitioner write-ups, not vendor marketing.</summary>
+<summary><b>AI research</b>: Lab announcements and practitioner write-ups, not vendor marketing.</summary>
 
 ```json
 {
@@ -448,7 +434,7 @@ the thing you actually follow.
 </details>
 
 <details>
-<summary><b>Open source & dev</b> &mdash; Kernels, languages, toolchains and developer practice.</summary>
+<summary><b>Open source & dev</b>: Kernels, languages, toolchains and developer practice.</summary>
 
 ```json
 {
@@ -466,7 +452,7 @@ the thing you actually follow.
 </details>
 
 <details>
-<summary><b>Chips & hardware</b> &mdash; Silicon, servers, and the semiconductor supply chain.</summary>
+<summary><b>Chips & hardware</b>: Silicon, servers, and the semiconductor supply chain.</summary>
 
 ```json
 {
@@ -483,7 +469,7 @@ the thing you actually follow.
 </details>
 
 <details>
-<summary><b>Consumer gadgets</b> &mdash; Phones, laptops and reviews.</summary>
+<summary><b>Consumer gadgets</b>: Phones, laptops and reviews.</summary>
 
 ```json
 {
@@ -500,11 +486,10 @@ the thing you actually follow.
 ```
 </details>
 
-
 ### Finance & Business
 
 <details>
-<summary><b>Personal finance</b> &mdash; Saving, investing and household money, written for individuals.</summary>
+<summary><b>Personal finance</b>: Saving, investing and household money, written for individuals.</summary>
 
 ```json
 {
@@ -520,7 +505,7 @@ the thing you actually follow.
 </details>
 
 <details>
-<summary><b>Macro & central banks</b> &mdash; Rate decisions and official statements, straight from the source.</summary>
+<summary><b>Macro & central banks</b>: Rate decisions and official statements, straight from the source.</summary>
 
 ```json
 {
@@ -536,7 +521,7 @@ the thing you actually follow.
 </details>
 
 <details>
-<summary><b>Fintech & payments</b> &mdash; Payments, banking technology and regulation.</summary>
+<summary><b>Fintech & payments</b>: Payments, banking technology and regulation.</summary>
 
 ```json
 {
@@ -552,7 +537,7 @@ the thing you actually follow.
 </details>
 
 <details>
-<summary><b>Real estate</b> &mdash; Housing markets, commercial property and construction.</summary>
+<summary><b>Real estate</b>: Housing markets, commercial property and construction.</summary>
 
 ```json
 {
@@ -569,7 +554,7 @@ the thing you actually follow.
 </details>
 
 <details>
-<summary><b>Energy</b> &mdash; Oil, gas, utilities and the grid.</summary>
+<summary><b>Energy</b>: Oil, gas, utilities and the grid.</summary>
 
 ```json
 {
@@ -586,7 +571,7 @@ the thing you actually follow.
 </details>
 
 <details>
-<summary><b>Aviation</b> &mdash; Airlines, aircraft and air traffic.</summary>
+<summary><b>Aviation</b>: Airlines, aircraft and air traffic.</summary>
 
 ```json
 {
@@ -602,7 +587,7 @@ the thing you actually follow.
 </details>
 
 <details>
-<summary><b>Retail & consumer</b> &mdash; Retail, grocery and fashion trade.</summary>
+<summary><b>Retail & consumer</b>: Retail, grocery and fashion trade.</summary>
 
 ```json
 {
@@ -620,7 +605,7 @@ the thing you actually follow.
 </details>
 
 <details>
-<summary><b>Pharma</b> &mdash; Drug development, approvals and the industry.</summary>
+<summary><b>Pharma</b>: Drug development, approvals and the industry.</summary>
 
 ```json
 {
@@ -637,11 +622,10 @@ the thing you actually follow.
 ```
 </details>
 
-
 ### Science & Health
 
 <details>
-<summary><b>Biotech & genomics</b> &mdash; Trials, approvals and the biotech business.</summary>
+<summary><b>Biotech & genomics</b>: Trials, approvals and the biotech business.</summary>
 
 ```json
 {
@@ -658,7 +642,7 @@ the thing you actually follow.
 </details>
 
 <details>
-<summary><b>Neuroscience & psychology</b> &mdash; Brain and behaviour research for a general reader.</summary>
+<summary><b>Neuroscience & psychology</b>: Brain and behaviour research for a general reader.</summary>
 
 ```json
 {
@@ -675,7 +659,7 @@ the thing you actually follow.
 </details>
 
 <details>
-<summary><b>Physics & maths</b> &mdash; Physics, maths and the fundamental sciences.</summary>
+<summary><b>Physics & maths</b>: Physics, maths and the fundamental sciences.</summary>
 
 ```json
 {
@@ -691,7 +675,7 @@ the thing you actually follow.
 </details>
 
 <details>
-<summary><b>Public health & policy</b> &mdash; Outbreaks, health systems and policy.</summary>
+<summary><b>Public health & policy</b>: Outbreaks, health systems and policy.</summary>
 
 ```json
 {
@@ -707,7 +691,7 @@ the thing you actually follow.
 </details>
 
 <details>
-<summary><b>Nutrition & fitness</b> &mdash; Food, exercise and the evidence behind them.</summary>
+<summary><b>Nutrition & fitness</b>: Food, exercise and the evidence behind them.</summary>
 
 ```json
 {
@@ -721,11 +705,10 @@ the thing you actually follow.
 ```
 </details>
 
-
 ### Gaming & Culture
 
 <details>
-<summary><b>Nintendo & console</b> &mdash; Platform-specific console coverage.</summary>
+<summary><b>Nintendo & console</b>: Platform-specific console coverage.</summary>
 
 ```json
 {
@@ -742,7 +725,7 @@ the thing you actually follow.
 </details>
 
 <details>
-<summary><b>Esports</b> &mdash; Competitive play, teams and tournaments.</summary>
+<summary><b>Esports</b>: Competitive play, teams and tournaments.</summary>
 
 ```json
 {
@@ -758,7 +741,7 @@ the thing you actually follow.
 </details>
 
 <details>
-<summary><b>Indie & game dev</b> &mdash; Making games, and the games most outlets skip.</summary>
+<summary><b>Indie & game dev</b>: Making games, and the games most outlets skip.</summary>
 
 ```json
 {
@@ -774,7 +757,7 @@ the thing you actually follow.
 </details>
 
 <details>
-<summary><b>Anime & manga</b> &mdash; Japanese animation, manga and licensing.</summary>
+<summary><b>Anime & manga</b>: Japanese animation, manga and licensing.</summary>
 
 ```json
 {
@@ -790,7 +773,7 @@ the thing you actually follow.
 </details>
 
 <details>
-<summary><b>Streaming & TV</b> &mdash; What's airing, what's cancelled, what's worth watching.</summary>
+<summary><b>Streaming & TV</b>: New shows, renewals and cancellations.</summary>
 
 ```json
 {
@@ -806,7 +789,7 @@ the thing you actually follow.
 </details>
 
 <details>
-<summary><b>Photography & visual</b> &mdash; Cameras, technique and photographic work.</summary>
+<summary><b>Photography & visual</b>: Cameras, technique and photographic work.</summary>
 
 ```json
 {
@@ -821,11 +804,10 @@ the thing you actually follow.
 ```
 </details>
 
-
 ### Regions
 
 <details>
-<summary><b>UK</b> &mdash; British national news.</summary>
+<summary><b>UK</b>: British national news.</summary>
 
 ```json
 {
@@ -842,7 +824,7 @@ the thing you actually follow.
 </details>
 
 <details>
-<summary><b>Europe</b> &mdash; Continental Europe and EU institutions.</summary>
+<summary><b>Europe</b>: Continental Europe and EU institutions.</summary>
 
 ```json
 {
@@ -859,7 +841,7 @@ the thing you actually follow.
 </details>
 
 <details>
-<summary><b>India</b> &mdash; Indian national news across the political spectrum.</summary>
+<summary><b>India</b>: Indian national news across the political spectrum.</summary>
 
 ```json
 {
@@ -875,7 +857,7 @@ the thing you actually follow.
 </details>
 
 <details>
-<summary><b>China & Hong Kong</b> &mdash; China coverage from inside and outside the mainland.</summary>
+<summary><b>China & Hong Kong</b>: China coverage from inside and outside the mainland.</summary>
 
 ```json
 {
@@ -891,7 +873,7 @@ the thing you actually follow.
 </details>
 
 <details>
-<summary><b>Middle East</b> &mdash; Regional coverage from several vantage points.</summary>
+<summary><b>Middle East</b>: Regional coverage from several vantage points.</summary>
 
 ```json
 {
@@ -908,7 +890,7 @@ the thing you actually follow.
 </details>
 
 <details>
-<summary><b>Africa</b> &mdash; Pan-African and Nigerian national coverage.</summary>
+<summary><b>Africa</b>: Pan-African and Nigerian national coverage.</summary>
 
 ```json
 {
@@ -924,7 +906,7 @@ the thing you actually follow.
 </details>
 
 <details>
-<summary><b>Latin America</b> &mdash; South American regional and national coverage.</summary>
+<summary><b>Latin America</b>: South American regional and national coverage.</summary>
 
 ```json
 {
@@ -939,15 +921,11 @@ the thing you actually follow.
 ```
 </details>
 
----
-
 ## Finding feeds for your own topic
 
-Paste this into any chat assistant with web search, swapping in your topic.
-It's written to make the assistant check URLs rather than recall them, which
-is where this usually goes wrong: plenty of plausible-looking feed URLs
-stopped working years ago and a model will happily reproduce them from
-memory.
+Paste this into a chat assistant that can search the web, with your topic
+filled in. It asks the assistant to open every URL it suggests. Assistants
+often give feed URLs from memory, and many of those stopped working years ago.
 
 ```
 I need RSS/Atom feed URLs for a daily news digest on: <YOUR TOPIC>.
@@ -967,8 +945,8 @@ Requirements:
    item. Title-only feeds are no use to me.
 5. Prefer publications with an editorial masthead. Avoid content farms, SEO
    blogs and press-release wires.
-6. Spread them across outlets, countries and, where the topic is contested,
-   editorial perspective. I want a full picture, not one house view.
+6. Spread them across different outlets and countries. Where the topic is
+   contested, include outlets with different editorial positions.
 7. No feed behind a login or a hard paywall that strips the summary text.
 
 For each one, tell me in a sentence: the outlet, roughly how often it
@@ -977,7 +955,7 @@ publishes, and its angle or specialism.
 
 ### Checking them yourself
 
-Faster than opening each one in a browser:
+To check a list of feeds at once:
 
 ```bash
 python - <<'EOF'
@@ -990,27 +968,20 @@ for url in [
 EOF
 ```
 
-Anything printing `0` is dead, whatever the page looks like in a browser.
+A feed that prints `0` has no entries, even if the page opens in a browser.
 
-After adding feeds, run the workflow by hand and read the log. `found 0 raw
-articles` means the topic found nothing, and an outlet count well below the
-feed count means several feeds returned nothing.
+After adding feeds, run the workflow by hand and read the log. If a topic
+shows `found 0 raw articles`, none of its feeds returned anything recent.
 
-### Two things to know
+### Feeds without dates
 
-- **Feeds with no dates on their items** are always treated as current, since
-  there is no timestamp to compare against the lookback window. A feed like
-  that can put the same items in your digest every day. Watch for repeats and
-  drop it if it happens.
-- **Adding feeds is cheap.** Articles are taken from each feed in turn, so a
-  new feed takes a share of the slots rather than a high-volume one taking
-  over. See [How it works](HOW-IT-WORKS.md#how-articles-are-chosen).
-
----
+An item with no publish date is always treated as new, because there's nothing
+to compare with the lookback window. A feed like that can send the same items
+every day. If you see repeats from one feed, remove it.
 
 ## Known dead
 
-Checked and not working, so don't spend an evening rediscovering them:
+These were checked and didn't work:
 
 AP, Reuters (all sections), Politico.com (the EU edition works), Axios,
 FiveThirtyEight, Vox, a16z, VentureBeat, PitchBook, Bleacher Report, The
@@ -1024,7 +995,7 @@ Nation Africa, Euractiv, CIDRAP, Endpoints News, Pharmaphorum, Examine,
 Chain Store Age, RetailWire, Spectrum News, APA Monitor, BPS Digest,
 GameFromScratch, Esports Charts, LensCulture, Berkeley BAIR.
 
-Alive but too slow for a 24-hour lookback, so they would rarely contribute:
+These work, but post too rarely to turn up in a 24-hour lookback:
 International Crisis Group, CMU ML blog, Rust blog, Quanta section feeds,
 WHO news, Mr Money Mustache, Calculated Risk, SemiAnalysis, Aviation Week,
 Telegraph, The China Project, Accenture Banking, Precision Nutrition,

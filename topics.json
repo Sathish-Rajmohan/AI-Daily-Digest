@@ -1,5 +1,5 @@
 {
-  "_comment": "Edit this file to add or remove topics. Each topic needs a name and a list of RSS feed URLs. max_stories caps how many distinct developments that topic breaks out under its own subheading; articles covering the same event still collapse into one, so it is a ceiling and not a target. Adding feeds is cheap: articles are taken from each feed in turn rather than by time, so a high-volume feed cannot crowd the others out. To remove a topic, delete its whole block. To add one, copy a block and change the name + feeds.",
+  "_comment": "Add a topic by copying a block and changing its name and feeds. Delete a block to remove that topic. max_stories is the most stories a topic can have, and related articles are merged, so quiet days have fewer. Articles are taken from each feed in turn, so a busy feed can't push the others out. README.md explains the settings, and FEEDS.md has ready-made topics.",
 
   "topics": [
     {
