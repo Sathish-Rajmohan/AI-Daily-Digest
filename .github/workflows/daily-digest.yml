@@ -11,10 +11,10 @@ on:
 jobs:
   send-digest:
     runs-on: ubuntu-latest
-    # A worst-case run takes about 20 minutes: every feed timing out, the
-    # full 8-minute model budget (TOTAL_BUDGET), then sending. This limit
+    # A worst-case run takes about 30 minutes: every feed timing out, the
+    # full 15-minute model budget (TOTAL_BUDGET), then sending. This limit
     # stops a stuck run long before GitHub's default of 6 hours.
-    timeout-minutes: 25
+    timeout-minutes: 35
     steps:
       - name: Check out repo
         uses: actions/checkout@v7

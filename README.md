@@ -354,6 +354,15 @@ order.
 No model answered. The email still goes out, with each topic's latest
 headlines in place of a briefing.
 
+### The log says `out of time budget`
+
+Writing the briefings took longer than the 15-minute model budget, so the
+topics left over were sent as headlines and the fact was skipped. Further up
+the log, lines ending in `answered in Ns` show how long each model took, and
+warnings show any retries or errors. A single slow day is usually Google's
+servers being busy. If it keeps happening, remove a topic or add a
+[backup model](#a-backup-model).
+
 ### Stories don't fold in Gmail
 
 Go back over [step 8](#8-collapsible-stories-in-gmail). The log warns if

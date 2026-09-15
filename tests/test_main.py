@@ -508,3 +508,57 @@ def test_a_topic_with_neither_briefing_nor_headlines_is_reported_as_skipped(writ
     [(_, body)] = sent
     assert "Skipped this run: Tech." in body
     assert "World overview." in body
+
+
+# Slow feeds shouldn't leave less time for writing the briefings.
+def test_feed_fetching_and_pauses_do_not_use_the_model_budget(write_config, mail_env, sent, transport,
+                                                              clock, monkeypatch, capsys):
+    monkeypatch.setattr(digest, "TOTAL_BUDGET", 60)
+
+    def slow_fetch(topic_cfg, lookback):
+        clock.now += 50
+        return make_articles(3)
+
+    monkeypatch.setattr(digest, "fetch_topic_articles", slow_fetch)
+    transport.script("gem-a", gemini_reply(BRIEF_REPLY))
+    write_config(config(topic("One"), topic("Two"), topic("Three"), topic("Four")))
+    digest.main()
+    [(_, body)] = sent
+    assert "out of time budget" not in capsys.readouterr().err
+    assert "No summary was available" not in body
+
+
+def test_each_answer_and_the_total_model_time_are_logged(write_config, mail_env, sent, transport, clock,
+                                                        monkeypatch, capsys):
+    monkeypatch.setattr(digest, "fetch_topic_articles", lambda topic_cfg, lookback: make_articles(3))
+
+    def slow_post(*args, **kwargs):
+        clock.now += 42
+        return transport(*args, **kwargs)
+
+    monkeypatch.setattr(digest.requests, "post", slow_post)
+    transport.script("gem-a", gemini_reply(BRIEF_REPLY), gemini_reply(SAMPLE_FACT))
+    write_config(config(topic("Tech")))
+    digest.main()
+    out = capsys.readouterr().out
+    assert out.count("gemini/gem-a answered in 42s") == 2
+    assert f"Model time used: 84s of {digest.TOTAL_BUDGET}s" in out
+
+
+def test_the_budget_covers_a_run_as_slow_as_recent_real_ones(write_config, mail_env, sent, transport,
+                                                             clock, monkeypatch, capsys):
+    # Five topics and the fact at 90 seconds each is slower than any recent
+    # real run, and every topic should still get a briefing.
+    monkeypatch.setattr(digest, "fetch_topic_articles", lambda topic_cfg, lookback: make_articles(3))
+
+    def slow_post(*args, **kwargs):
+        clock.now += 90
+        return transport(*args, **kwargs)
+
+    monkeypatch.setattr(digest.requests, "post", slow_post)
+    transport.script("gem-a", gemini_reply(BRIEF_REPLY))
+    write_config(config(*(topic(f"Topic{i}") for i in range(5))))
+    digest.main()
+    [(_, body)] = sent
+    assert "out of time budget" not in capsys.readouterr().err
+    assert "No summary was available" not in body

@@ -442,3 +442,39 @@ def test_each_provider_is_given_its_own_article_cap(transport, with_groq):
     caps = []
     chain(build_prompt=lambda cap: caps.append(cap) or "prompt")
     assert caps == [digest.PROVIDER_ARTICLE_CAP["gemini"]] * 2 + [digest.PROVIDER_ARTICLE_CAP["groq"]]
+
+
+def test_time_outside_the_budget_is_given_back(clock):
+    digest.start_budget()
+    with digest._outside_budget():
+        clock.now += 100
+    assert digest._budget_left() == digest.TOTAL_BUDGET
+    clock.now += 5
+    assert digest._budget_left() == digest.TOTAL_BUDGET - 5
+
+
+def test_time_outside_the_budget_is_given_back_even_on_error(clock):
+    digest.start_budget()
+    with pytest.raises(RuntimeError):
+        with digest._outside_budget():
+            clock.now += 30
+            raise RuntimeError("feed blew up")
+    assert digest._budget_left() == digest.TOTAL_BUDGET
+
+
+def test_outside_the_budget_before_it_starts(clock):
+    with digest._outside_budget():
+        clock.now += 10
+    assert digest._budget_left() == float("inf")
+
+
+def test_a_slow_answer_is_logged_with_its_time(transport, clock, capsys):
+    def slow(*args, **kwargs):
+        clock.now += 37
+        return transport(*args, **kwargs)
+
+    transport.script("gem-a", gemini_reply(OK))
+    digest.requests.post = slow
+    digest.start_budget()
+    assert chain() == OK
+    assert "gemini/gem-a answered in 37s" in capsys.readouterr().out

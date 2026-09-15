@@ -119,9 +119,12 @@ Other failures:
 - If no model answers, each topic lists its latest headlines and the email
   still goes out.
 
-All model calls share one 8-minute budget. When a wide outage uses it up, the
-run ends early and sends headlines. Without it, a run could keep retrying until
-the 25-minute workflow timeout and send nothing.
+Model calls share a 15-minute budget. Fetching feeds and the pauses between
+topics don't count against it. Recent runs have taken five to nine minutes in
+total. When a wide outage uses up the budget, the run stops asking and sends
+headlines for the topics that are left. Without a budget, a run could keep
+retrying until the 35-minute workflow timeout and send nothing. The log shows
+how long each model took to answer and how much of the budget the run used.
 
 Groq only gets the first 45 articles of a topic. Its free tier limits tokens
 per minute, and a full list of 100 would use most of a minute's allowance on

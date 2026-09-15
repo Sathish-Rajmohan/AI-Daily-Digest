@@ -16,6 +16,7 @@ import socket
 import ssl
 import sys
 import time
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -324,9 +325,10 @@ MAX_OUTPUT_TOKENS = 8192
 # and 100 articles would use most of a minute's allowance on one topic.
 PROVIDER_ARTICLE_CAP = {"gemini": MAX_ARTICLES_PER_TOPIC, "groq": 45}
 
-# Time limit for all model calls in a run. In a broad outage it ends the run
-# with headlines before the workflow timeout would kill it.
-TOTAL_BUDGET = 480
+# Time limit for all model calls in a run, not counting feed fetching. In a
+# broad outage it ends the run with headlines before the workflow timeout
+# would kill it. Healthy runs have needed five to nine minutes.
+TOTAL_BUDGET = 900
 
 
 def build_model_chain():
@@ -529,6 +531,18 @@ def _budget_left():
     if _deadline is None:
         return float("inf")
     return _deadline - time.monotonic()
+
+
+@contextmanager
+def _outside_budget():
+    """Time spent in this block is added back to the model budget."""
+    global _deadline
+    started = time.monotonic()
+    try:
+        yield
+    finally:
+        if _deadline is not None:
+            _deadline += time.monotonic() - started
 
 
 def _sleep_within_budget(seconds):
@@ -912,13 +926,18 @@ def run_chain(build_prompt, system, schema, label):
             break
         try:
             prompt = build_prompt(PROVIDER_ARTICLE_CAP.get(provider, MAX_ARTICLES_PER_TOPIC))
+            asked_at = time.monotonic()
             text = _call_model(provider, model, prompt, label, system, schema)
         except _ModelUnusable as e:
             print(f"  [warn] dropping {provider}/{model} for this run ({e})", file=sys.stderr)
             _unusable_models.add((provider, model))
             continue
+        took = time.monotonic() - asked_at
         if not text:
-            print(f"  [warn] {provider}/{model} didn't answer, trying the next model", file=sys.stderr)
+            print(
+                f"  [warn] {provider}/{model} didn't answer after {took:.0f}s, trying the next model",
+                file=sys.stderr,
+            )
             continue
 
         # Parse inside the loop so a reply cut off mid-JSON falls through to the next
@@ -933,6 +952,7 @@ def run_chain(build_prompt, system, schema, label):
             print(f"  raw text: {text[:500]}", file=sys.stderr)
             continue
 
+        print(f"  {provider}/{model} answered in {took:.0f}s")
         if (provider, model) != chain[0]:
             print(f"  [info] answered by fallback model {provider}/{model}")
         return value
@@ -1951,7 +1971,8 @@ def main():
         max_developments = topic.get("max_stories", 5)
         print(f"Fetching articles for topic: {name}")
         try:
-            articles = fetch_topic_articles(topic, lookback_hours)
+            with _outside_budget():
+                articles = fetch_topic_articles(topic, lookback_hours)
         except Exception as e:
             print(f"  [error] fetch failed for '{name}': {e}", file=sys.stderr)
             topic_results.append((name, None, "its feeds couldn't be fetched this run"))
@@ -1991,7 +2012,8 @@ def main():
                 topic_results.append((name, None, "no summary came back this run"))
 
         # Pause between topics for the free tier's rate limits.
-        time.sleep(2)
+        with _outside_budget():
+            time.sleep(2)
 
     if not any(brief for _, brief, _ in topic_results):
         print(
@@ -2012,6 +2034,8 @@ def main():
             print(f"  [warn] fact of the day failed: {e}", file=sys.stderr)
         if fact:
             print(f"  got a fact from {fact['field']}")
+
+    print(f"Model time used: {TOTAL_BUDGET - _budget_left():.0f}s of {TOTAL_BUDGET}s")
 
     date_str = now_local.strftime("%A, %d %B %Y")
     # One setting controls the AMP copy and the checkbox folding.
