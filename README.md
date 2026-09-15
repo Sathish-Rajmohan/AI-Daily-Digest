@@ -17,6 +17,8 @@ Each email opens with one fact worth knowing, then a section per topic: a
 short overview of the day, then a subheading per development with a few
 plain-language paragraphs and its sources underneath. Articles covering the
 same event are fused into one entry rather than repeated as near-duplicates.
+In Gmail each development shows as a single line you tap to open, so the
+email stays short without leaving anything out ([step 7](#7-collapsible-stories-in-gmail)).
 
 Everything runs on free tiers.
 
@@ -83,7 +85,7 @@ with phone or authenticator 2SV instead.
 | `GEMINI_API_KEY` | Key from step 2 |
 | `GMAIL_ADDRESS` | Gmail address that owns the App Password |
 | `GMAIL_APP_PASSWORD` | 16-character App Password from step 3 |
-| `RECIPIENT_EMAIL` | Where the digest goes (can be the same address) |
+| `RECIPIENT_EMAIL` | Where the digest goes. Use a different address from `GMAIL_ADDRESS` for collapsible stories ([step 7](#7-collapsible-stories-in-gmail)) |
 | `GROQ_API_KEY` | Optional, see [below](#optional-a-backup-model) |
 
 ### 5. Enable and test
@@ -106,6 +108,29 @@ monthly empty commit, but it needs permission to push:
 Leave it on the default read-only setting and the keepalive job fails, which
 you'd see in its Actions log. The alternative is pushing a real commit
 yourself every couple of months.
+
+### 7. Collapsible stories in Gmail
+
+Optional, but worth it if you read in Gmail. Each story then shows as one
+line, and tapping it opens the full write-up and sources. It works on
+gmail.com and in the Gmail apps. Every other mail app shows the full,
+expanded email, so nothing is lost either way.
+
+Gmail only allows this from a sender other than yourself, and only from a
+sender you've approved:
+
+1. **Send from a second Gmail address.** Create one (or use one you have),
+   turn on 2-Step Verification, and make an App Password for it as in step 3.
+   Set `GMAIL_ADDRESS` and `GMAIL_APP_PASSWORD` to that account, and
+   `RECIPIENT_EMAIL` to the address you read.
+2. **Approve that sender in the Gmail you read.** Open **Settings → See all
+   settings → General**, find **Dynamic email**, make sure **Enable dynamic
+   email** is ticked, then open **Developer settings**, enter the sending
+   address, and save.
+3. Run the workflow again. Tap a story's line to open it.
+
+Gmail shows the collapsible version for 30 days after a digest arrives, then
+switches that message to the full version.
 
 ---
 
@@ -147,7 +172,8 @@ feed takes a share of the slots rather than a busy one taking over.
   "lookback_hours": 24,
   "email_subject_prefix": "Daily Digest",
   "timezone": "Australia/Sydney",
-  "fact_of_the_day": true
+  "fact_of_the_day": true,
+  "collapsible_stories": true
 }
 ```
 
@@ -157,6 +183,7 @@ feed takes a share of the slots rather than a busy one taking over.
 | `email_subject_prefix` | Subject line before the date. |
 | `timezone` | IANA zone used for the date in the email. |
 | `fact_of_the_day` | Set `false` to drop the fact block at the top. |
+| `collapsible_stories` | Set `false` to send only the full, always-expanded email. |
 
 ### Delivery time
 
@@ -206,6 +233,12 @@ message names the topic and the field to fix.
 
 **Gmail login rejected:** use an App Password, not your normal password, and
 confirm 2-Step Verification is on.
+
+**Stories aren't collapsible in Gmail:** check the three things in [step
+7](#7-collapsible-stories-in-gmail): `GMAIL_ADDRESS` and `RECIPIENT_EMAIL` are
+different addresses, dynamic email is enabled, and the sender is saved under
+Developer settings. The Actions log warns if the addresses match or the
+collapsible version was too large to send.
 
 **Gemini 429:** the script backs off and retries. With many topics, raise the
 `time.sleep(2)` between topics in `digest.py`.

@@ -27,10 +27,23 @@ def written_brief(name):
     }
 
 
+class Outbox(list):
+    """(subject, html) per send, with the AMP copy for each kept in .amp."""
+
+    def __init__(self):
+        super().__init__()
+        self.amp = []
+
+
 @pytest.fixture
 def sent(monkeypatch):
-    box = []
-    monkeypatch.setattr(digest, "send_email", lambda subject, body: box.append((subject, body)))
+    box = Outbox()
+
+    def record(subject, body, amp_body=None):
+        box.append((subject, body))
+        box.amp.append(amp_body)
+
+    monkeypatch.setattr(digest, "send_email", record)
     return box
 
 
@@ -261,8 +274,33 @@ def test_every_topic_empty_still_sends_a_stub(write_config, mail_env, sent, fake
     assert "every topic came back empty" in capsys.readouterr().err
 
 
+def test_collapsible_copy_is_sent_by_default(write_config, mail_env, sent, fake_pipeline, capsys):
+    write_config(config(topic("Tech")))
+    digest.main()
+    [amp] = sent.amp
+    assert "<amp-accordion" in amp and "Tech lead story" in amp
+    assert "Collapsible version is" in capsys.readouterr().out
+
+
+def test_collapsible_copy_can_be_turned_off(write_config, mail_env, sent, fake_pipeline):
+    write_config(config(topic("Tech"), collapsible_stories=False))
+    digest.main()
+    assert sent.amp == [None]
+    assert len(sent) == 1
+
+
+def test_oversized_collapsible_copy_is_dropped_not_sent_broken(write_config, mail_env, sent,
+                                                                fake_pipeline, monkeypatch, capsys):
+    monkeypatch.setattr(digest, "AMP_MAX_BYTES", 100)
+    write_config(config(topic("Tech")))
+    digest.main()
+    assert sent.amp == [None]
+    assert "Tech overview." in sent[0][1]
+    assert "full version only" in capsys.readouterr().err
+
+
 def test_send_failure_exits_non_zero(write_config, mail_env, fake_pipeline, monkeypatch, capsys):
-    def refuse(subject, body):
+    def refuse(subject, body, amp_body=None):
         raise OSError("535 Username and Password not accepted")
     monkeypatch.setattr(digest, "send_email", refuse)
     write_config(config(topic("Tech")))
@@ -284,7 +322,8 @@ def html_of(smtp):
     [server] = smtp.instances
     [(_, _, raw)] = server.sent
     msg = email.message_from_string(raw)
-    return msg, msg.get_payload()[0].get_payload(decode=True).decode("utf-8")
+    parts = {p.get_content_type(): p.get_payload(decode=True).decode("utf-8") for p in msg.get_payload()}
+    return msg, parts["text/html"]
 
 
 def test_full_run(write_config, mail_env, feeds, transport, smtp):
@@ -310,6 +349,11 @@ def test_full_run(write_config, mail_env, feeds, transport, smtp):
     msg, body = html_of(smtp)
     assert msg["Subject"].startswith("Digest - ")
     assert "Two outlets agree" in body and "One story led." in body
+    parts = msg.get_payload()
+    assert [p.get_content_type() for p in parts] == ["text/x-amp-html", "text/html"]
+    amp = parts[0].get_payload(decode=True).decode("utf-8")
+    assert "<amp-accordion" in amp and "Two outlets agree" in amp
+    assert 'href="https://a.example/1"' in amp
     assert 'href="https://a.example/1"' in body and 'href="https://b.example/1"' in body
     assert "https://a.example/2" not in body and "A stale" not in body
     assert SAMPLE_FACT["fact"] in body

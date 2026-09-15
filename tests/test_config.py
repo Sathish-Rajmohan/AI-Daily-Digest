@@ -47,6 +47,7 @@ def test_shipped_settings_are_valid(shipped):
     assert s["lookback_hours"] > 0
     assert isinstance(s["email_subject_prefix"], str)
     assert isinstance(s["fact_of_the_day"], bool)
+    assert isinstance(s["collapsible_stories"], bool)
     from zoneinfo import ZoneInfo
     ZoneInfo(s["timezone"])
 
@@ -122,6 +123,7 @@ def test_malformed_topic_is_rejected_with_a_clear_message(write_config, bad_topi
     ({"lookback_hours": 0}, "lookback_hours"),
     ({"lookback_hours": True}, "lookback_hours"),
     ({"fact_of_the_day": "false"}, "fact_of_the_day"),
+    ({"collapsible_stories": "yes"}, "collapsible_stories"),
     ({"email_subject_prefix": 7}, "email_subject_prefix"),
     ({"timezone": 10}, "timezone"),
 ])

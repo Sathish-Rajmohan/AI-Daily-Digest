@@ -118,8 +118,9 @@ def _check_settings(settings):
     if isinstance(lookback, bool) or not isinstance(lookback, (int, float)) or lookback <= 0:
         raise ValueError(f"{CONFIG_PATH}: 'lookback_hours' must be a number above 0")
 
-    if not isinstance(settings.get("fact_of_the_day", True), bool):
-        raise ValueError(f"{CONFIG_PATH}: 'fact_of_the_day' must be true or false")
+    for key in ("fact_of_the_day", "collapsible_stories"):
+        if not isinstance(settings.get(key, True), bool):
+            raise ValueError(f"{CONFIG_PATH}: '{key}' must be true or false")
 
     for key in ("email_subject_prefix", "timezone"):
         if key in settings and not isinstance(settings[key], str):
@@ -1471,7 +1472,219 @@ def check_email_size(html_body):
     return size
 
 
-def send_email(subject, html_body):
+# ---------------------------------------------------------------------------
+# Collapsible version (AMP for Email)
+# ---------------------------------------------------------------------------
+#
+# Gmail has no way to collapse part of an ordinary HTML email. It rewrites
+# <details> and <summary> into plain tags, and it doesn't support the
+# :checked selector that CSS-only tricks depend on. AMP for Email is the one
+# format where it can, through amp-accordion, so the digest also carries an
+# AMP copy in which each story shows only its one-line subheading until it's
+# tapped. Gmail shows that copy. Every other client, and Gmail itself once a
+# message is 30 days old, shows the full HTML version instead, so a story is
+# never hidden anywhere it can't be opened.
+
+# The AMP spec's ceiling for the whole document. Gmail ignores an AMP part
+# past it, so a digest that large is sent as the full version only.
+AMP_MAX_BYTES = 200_000
+
+# Class-based rather than inline like the HTML version: AMP allows a
+# stylesheet, and one set of rules is far smaller than repeating them on
+# every element. The palette is shared, so both versions look the same.
+_AMP_CSS = f"""
+body {{ margin:0; padding:0; background:{_PAGE_BG}; font-family:{_FONT_STACK}; }}
+.wrap {{ max-width:640px; margin:0 auto; padding:28px 12px; }}
+.card {{ background:{_CARD_BG}; border-radius:10px; padding:32px 28px; }}
+.title {{ font-size:23px; font-weight:700; color:{_TEXT_HEADING}; letter-spacing:-0.01em; }}
+.date {{ font-size:13px; color:{_TEXT_MUTED}; margin-top:4px; }}
+.contents {{ margin-top:16px; font-size:13px; color:{_TEXT_MUTED}; }}
+.hint {{ margin-top:4px; font-size:12px; color:{_TEXT_MUTED}; }}
+.fact {{ margin-top:20px; padding:16px 18px; background:{_FACT_BG};
+  border:1px solid {_FACT_BORDER}; border-radius:8px; }}
+.label {{ font-size:10px; font-weight:700; letter-spacing:0.07em;
+  text-transform:uppercase; color:{_ACCENT}; margin-bottom:8px; }}
+.fact-text {{ font-size:15px; font-weight:600; color:{_TEXT_HEADING}; line-height:1.55; margin:0; }}
+.fact-why {{ font-size:14px; color:{_TEXT_BODY}; line-height:1.6; margin:8px 0 0 0; }}
+.warn {{ margin:20px 0 0 0; padding:12px 14px; background:{_WARN_BG};
+  border:1px solid {_WARN_BORDER}; border-radius:6px; font-size:13px; color:{_WARN_TEXT}; }}
+.topic {{ padding:26px 0 6px 0; border-top:1px solid {_BORDER}; }}
+.topic-name {{ font-size:11px; font-weight:700; letter-spacing:0.07em;
+  text-transform:uppercase; color:{_ACCENT}; margin-bottom:10px; }}
+.overview {{ font-size:16px; color:{_TEXT_HEADING}; line-height:1.6; margin:0 0 6px 0; }}
+.note {{ font-size:14px; color:{_TEXT_MUTED}; line-height:1.6; margin:0 0 4px 0; }}
+.stories {{ margin-top:12px; }}
+.story {{ border-top:1px solid {_BORDER}; }}
+.story > .story-head {{ display:flex; align-items:center; justify-content:space-between;
+  background:{_CARD_BG}; border:0; margin:0; padding:13px 0; cursor:pointer;
+  font-size:15px; font-weight:700; color:{_TEXT_HEADING}; line-height:1.35; }}
+.toggle {{ flex:none; margin-left:14px; font-size:20px; font-weight:400;
+  line-height:1; color:{_ACCENT}; }}
+.less {{ display:none; }}
+.story[expanded] .more {{ display:none; }}
+.story[expanded] .less {{ display:inline; }}
+.story-body {{ padding:0 0 14px 0; }}
+.para {{ font-size:15px; color:{_TEXT_BODY}; line-height:1.6; margin:0 0 12px 0; }}
+.sources {{ margin-top:4px; }}
+.sources-label {{ font-size:10px; font-weight:700; letter-spacing:0.06em;
+  text-transform:uppercase; color:{_TEXT_MUTED}; margin-bottom:6px; }}
+.source-list {{ margin:0; padding:0; list-style:none; font-size:13px; line-height:1.5; }}
+.source-list li {{ margin:0 0 6px 0; }}
+.source-list a {{ color:{_ACCENT}; text-decoration:none; font-weight:500; }}
+.plain {{ color:{_TEXT_BODY}; font-weight:500; }}
+.muted {{ color:{_TEXT_MUTED}; }}
+.arrow {{ color:{_ACCENT}; }}
+.empty {{ padding:26px 0; border-top:1px solid {_BORDER}; font-size:15px; color:{_TEXT_BODY}; }}
+.footer {{ margin-top:20px; padding-top:22px; border-top:1px solid {_BORDER};
+  font-size:12px; color:{_TEXT_MUTED}; text-align:center; }}
+"""
+
+
+def _amp_paragraphs(text, css_class):
+    parts = [p.strip() for p in re.split(r"\n\s*\n", text or "") if p.strip()]
+    return "".join(f'<p class="{css_class}">{html.escape(p)}</p>' for p in parts)
+
+
+def _amp_sources(sources, label="Sources"):
+    items = ""
+    for s in sources or []:
+        title = html.escape(s.get("title") or "(untitled)")
+        link = _web_link(s.get("link"))
+        outlet = html.escape(s.get("outlet") or "")
+        outlet_bit = f' <span class="muted">({outlet})</span>' if outlet else ""
+        if link:
+            title_html = f'<a href="{html.escape(link, quote=True)}" target="_blank">{title}</a>'
+        else:
+            title_html = f'<span class="plain">{title}</span>'
+        items += f'<li><span class="arrow">&#8250;</span> {title_html}{outlet_bit}</li>'
+    if not items:
+        return ""
+    return (
+        f'<div class="sources"><div class="sources-label">{label}</div>'
+        f'<ul class="source-list">{items}</ul></div>'
+    )
+
+
+def _story_label(story):
+    """
+    The one line a collapsed story shows. Normally that's the subheading. A
+    story that came back without one falls back to its opening sentence, so
+    there's still something meaningful to tap.
+    """
+    subheading = (story.get("subheading") or "").strip()
+    if subheading:
+        return subheading
+    detail = (story.get("detail") or "").strip()
+    first = re.split(r"(?<=[.!?])\s+", detail, maxsplit=1)[0] if detail else ""
+    if len(first) > 120:
+        first = first[:117].rstrip() + "..."
+    return first or "More on this topic"
+
+
+def build_amp(topic_results, date_str, fact=None):
+    """
+    The collapsible copy of the digest. Same content as build_html(): every
+    subheading, paragraph and source is here too, with each story's detail
+    and sources folded under its subheading. The topic overviews and the
+    fact stay open, since they're what a quick read is for.
+    """
+    sections = []
+    failed_topics = []
+    topic_names = []
+    has_accordion = False
+
+    for topic_name, brief, note in topic_results:
+        if note:
+            failed_topics.append(topic_name)
+        if not brief:
+            continue
+        topic_names.append(topic_name)
+
+        if brief.get("degraded"):
+            # The headline fallback is already one line per story with
+            # nothing further to open, so it's listed as it is.
+            inner = (
+                '<p class="note">No summary was available for this topic this run, '
+                "so the latest stories are listed directly.</p>"
+            )
+            for story in brief.get("stories") or []:
+                inner += _amp_sources(story.get("sources"), "Stories")
+        else:
+            inner = _amp_paragraphs(brief.get("overview"), "overview")
+            rows = ""
+            for story in brief.get("stories") or []:
+                body = _amp_paragraphs(story.get("detail"), "para") + _amp_sources(story.get("sources"))
+                if not body:
+                    body = '<p class="para">No further detail.</p>'
+                rows += (
+                    '<section class="story">'
+                    f'<h4 class="story-head"><span>{html.escape(_story_label(story))}</span>'
+                    '<span class="toggle" aria-hidden="true">'
+                    '<span class="more">+</span><span class="less">&#8722;</span></span></h4>'
+                    f'<div class="story-body">{body}</div>'
+                    "</section>"
+                )
+            if rows:
+                has_accordion = True
+                inner += f'<amp-accordion class="stories">{rows}</amp-accordion>'
+
+        sections.append(
+            f'<div class="topic"><div class="topic-name">{html.escape(topic_name)}</div>{inner}</div>'
+        )
+
+    body = "".join(sections) if sections else (
+        '<div class="empty">No new stories found in the lookback window.</div>'
+    )
+
+    failure_notice = ""
+    if failed_topics:
+        names = ", ".join(html.escape(n) for n in failed_topics)
+        failure_notice = (
+            f'<div class="warn">Skipped this run: {names}. Check the Actions log for details.</div>'
+        )
+
+    contents = ""
+    if topic_names:
+        contents = f'<div class="contents">In today\'s digest: {html.escape(", ".join(topic_names))}</div>'
+        if has_accordion:
+            contents += '<div class="hint">Tap a story to read more.</div>'
+
+    fact_html = ""
+    if fact:
+        why = f'<p class="fact-why">{html.escape(fact["why"])}</p>' if fact.get("why") else ""
+        fact_html = (
+            f'<div class="fact"><div class="label">One thing worth knowing &middot; '
+            f'{html.escape(fact["field"])}</div>'
+            f'<p class="fact-text">{html.escape(fact["fact"])}</p>{why}</div>'
+        )
+
+    return _compact_html(f"""
+    <!doctype html>
+    <html amp4email data-css-strict>
+    <head>
+      <meta charset="utf-8">
+      <script async src="https://cdn.ampproject.org/v0.js"></script>
+      <script async custom-element="amp-accordion"
+        src="https://cdn.ampproject.org/v0/amp-accordion-0.1.js"></script>
+      <style amp4email-boilerplate>body{{visibility:hidden}}</style>
+      <style amp-custom>{_AMP_CSS}</style>
+    </head>
+    <body>
+      <div class="wrap"><div class="card">
+        <div class="title">Your Daily Digest</div>
+        <div class="date">{html.escape(date_str)}</div>
+        {contents}
+        {fact_html}
+        {failure_notice}
+        {body}
+        <div class="footer">Generated automatically. Edit topics.json in your repo to customize topics and sources.</div>
+      </div></div>
+    </body>
+    </html>
+    """)
+
+
+def send_email(subject, html_body, amp_body=None):
     sender = os.environ["GMAIL_ADDRESS"].strip()
     # App passwords are often copied with spaces. Gmail accepts them either
     # way, but stripping avoids paste mistakes.
@@ -1490,6 +1703,22 @@ def send_email(subject, html_body):
     msg["Subject"] = subject
     msg["From"] = sender
     msg["To"] = recipient
+
+    if amp_body and sender.lower() == recipient.lower():
+        # Gmail only renders the AMP part when From and To differ, so on a
+        # send-to-self it would just be dead weight in the message.
+        print(
+            "  [warn] collapsible stories need RECIPIENT_EMAIL to be a different "
+            "address from GMAIL_ADDRESS, or Gmail won't show them. Sending the "
+            "full version only.",
+            file=sys.stderr,
+        )
+        amp_body = None
+
+    # Order matters. A client shows the last part it can render, so the full
+    # HTML goes last for everyone else, and Gmail wants the AMP part ahead of it.
+    if amp_body:
+        msg.attach(MIMEText(amp_body, "x-amp-html", "utf-8"))
     msg.attach(MIMEText(html_body, "html", "utf-8"))
 
     context = ssl.create_default_context()
@@ -1615,9 +1844,23 @@ def main():
     subject = f"{subject_prefix} - {date_str}"
     check_email_size(html_body)
 
+    amp_body = None
+    if settings.get("collapsible_stories", True):
+        amp_body = build_amp(topic_results, date_str, fact)
+        amp_size = len(amp_body.encode("utf-8"))
+        print(f"Collapsible version is {amp_size / 1024:.0f}KB (AMP allows {AMP_MAX_BYTES // 1000}KB)")
+        if amp_size > AMP_MAX_BYTES:
+            print(
+                "  [warn] the collapsible version is over AMP's size limit, so Gmail "
+                "would ignore it. Sending the full version only. Lower max_stories "
+                "in topics.json to bring it back.",
+                file=sys.stderr,
+            )
+            amp_body = None
+
     print("Sending email...")
     try:
-        send_email(subject, html_body)
+        send_email(subject, html_body, amp_body)
     except Exception as e:
         print(f"ERROR: failed to send email: {e}", file=sys.stderr)
         sys.exit(1)

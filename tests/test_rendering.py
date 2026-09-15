@@ -349,6 +349,35 @@ def test_addresses_are_trimmed(smtp, mail_env, monkeypatch):
     assert (from_addr, to_addrs) == ("sender@example.com", ["reader@example.com"])
 
 
+def test_amp_copy_goes_before_the_full_html(smtp, mail_env):
+    amp = "<!doctype html><html amp4email>collapsible</html>"
+    digest.send_email("S", "<p>Full</p>", amp)
+    _, _, _, msg = sent_message(smtp)
+    parts = msg.get_payload()
+    assert [p.get_content_type() for p in parts] == ["text/x-amp-html", "text/html"]
+    assert parts[0].get_payload(decode=True).decode("utf-8") == amp
+    assert parts[1].get_payload(decode=True).decode("utf-8") == "<p>Full</p>"
+
+
+@pytest.mark.parametrize("recipient", ["sender@example.com", "SENDER@Example.com", None])
+def test_amp_copy_is_left_out_when_sending_to_yourself(smtp, mail_env, monkeypatch, capsys, recipient):
+    if recipient is None:
+        monkeypatch.delenv("RECIPIENT_EMAIL")
+    else:
+        monkeypatch.setenv("RECIPIENT_EMAIL", recipient)
+    digest.send_email("S", "<p>Full</p>", "<html amp4email></html>")
+    _, _, _, msg = sent_message(smtp)
+    assert [p.get_content_type() for p in msg.get_payload()] == ["text/html"]
+    assert "different address" in capsys.readouterr().err
+
+
+def test_no_amp_copy_means_no_amp_part_and_no_warning(smtp, mail_env, capsys):
+    digest.send_email("S", "<p>Full</p>", None)
+    _, _, _, msg = sent_message(smtp)
+    assert [p.get_content_type() for p in msg.get_payload()] == ["text/html"]
+    assert capsys.readouterr().err == ""
+
+
 @pytest.mark.parametrize("var, value", [("GMAIL_ADDRESS", "   "), ("GMAIL_APP_PASSWORD", "    ")])
 def test_blank_credentials_are_refused_before_connecting(smtp, mail_env, monkeypatch, var, value):
     monkeypatch.setenv(var, value)

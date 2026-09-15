@@ -9,6 +9,7 @@ change something and would rather know why it is the way it is.
 - [The fact of the day](#the-fact-of-the-day)
 - [What happens when a model is down](#what-happens-when-a-model-is-down)
 - [How long the email can get](#how-long-the-email-can-get)
+- [Collapsible stories](#collapsible-stories)
 - [Swapping or adding an LLM](#swapping-or-adding-an-llm)
 
 ---
@@ -210,6 +211,40 @@ for non-Gmail recipients, and the layout is table-based because Outlook
 renders mail with the Word engine. The email is deliberately light-only:
 Gmail's mobile apps invert colours in dark mode regardless of any CSS, so the
 palette avoids pure black and white, which invert worst.
+
+---
+
+## Collapsible stories
+
+Gmail has no way to collapse part of an ordinary HTML email. It rewrites
+`<details>` and `<summary>` into plain tags, it doesn't support the `:checked`
+selector that CSS-only accordions depend on, and in-email jump links do
+nothing in its mobile apps. The one format Gmail will collapse is AMP for
+Email, so each digest carries two copies:
+
+| Copy | Shown by | Stories |
+|---|---|---|
+| AMP (`text/x-amp-html`) | Gmail web and apps, for 30 days | One line each, tap to open |
+| HTML (`text/html`) | Every other client, and Gmail after 30 days | Fully expanded |
+
+Both are built from the same briefings, and a test checks that every
+subheading, paragraph, source and link in the full copy also appears in the
+collapsible one. The topic overviews and the fact of the day stay open in
+both, since they're the quick read.
+
+Gmail only renders the AMP copy when the sender and recipient are different
+addresses and the recipient has approved the sender, which is why the setup
+needs a second sending address. When the two addresses match, the AMP copy is
+left out and the log says so. It's also left out if it passes AMP's 200KB
+document limit, rather than being sent in a form Gmail would ignore.
+
+Gmail quietly falls back to the full version if the AMP copy breaks any of
+AMP's rules, so an invalid copy looks like the feature simply not working.
+The markup passes the official validator, and it's worth rerunning after any
+change to `build_amp()`: save a generated copy to a file and run
+`npx amphtml-validator --html_format AMP4EMAIL <file>`. AMP also rejects inline
+`style` attributes in favour of one stylesheet, so this copy uses classes
+where the HTML copy uses inline styles, with the same palette.
 
 ---
 
