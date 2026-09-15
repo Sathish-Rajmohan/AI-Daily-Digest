@@ -270,6 +270,16 @@ def test_masthead_strip_widths_follow_each_topics_share():
     assert '<span class="entry ink0">' in out and '<span class="entry ink1">' in out
 
 
+def test_topic_index_can_wrap_between_entries_on_a_narrow_screen():
+    names = ["Tech & AI", "International News", "Geopolitics", "Markets & Business", "Science"]
+    out = digest.build_amp([(n, brief(n), None) for n in names], DATE)
+    index = re.search(r'<div class="index">(.*?)</div>', out).group(1)
+    # Every entry is nowrap, so the spaces between them are the only break points.
+    assert index.count('</span></span> <span class="entry ') == len(names) - 1
+    css = re.search(r"<style amp-custom>(.*?)</style>", out).group(1)
+    assert "overflow-wrap:anywhere" in css
+
+
 def test_masthead_line_matches_the_html_version():
     results = [("Tech", brief("Tech", 3), None), ("World", brief("World", 1), None)]
     line = digest._summary_line(digest._digest_summary(results, None, True), True)

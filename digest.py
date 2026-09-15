@@ -1659,7 +1659,8 @@ def _amp_ink_css():
 _AMP_CSS = f"""
 body {{ margin:0; padding:0; background:{_PAGE_BG}; font-family:{_FONT_STACK}; color:{_TEXT_BODY}; }}
 .wrap {{ max-width:640px; margin:0 auto; padding:24px 10px; }}
-.card {{ background:{_CARD_BG}; border-radius:6px; padding:34px 30px 30px 30px; }}
+.card {{ background:{_CARD_BG}; border-radius:6px; padding:34px 30px 30px 30px;
+  overflow-wrap:anywhere; }}
 .dateline {{ font-size:11px; font-weight:700; letter-spacing:0.14em;
   text-transform:uppercase; color:{_TEXT_MUTED}; }}
 .title {{ font-family:{_SERIF_STACK}; font-size:38px; line-height:1.1; font-weight:700;
@@ -1756,7 +1757,9 @@ def _amp_strip(summary):
 
 
 def _amp_index(summary):
-    entries = "".join(
+    # The space between entries is where the line can wrap. Each entry is
+    # nowrap, so without it the whole index is one line wider than a phone.
+    entries = " ".join(
         f'<span class="entry ink{t["index"] % len(_TOPIC_INKS)}">'
         f'<span class="mark">&#9632;</span> '
         f'<span class="entry-name">{html.escape(t["name"])}</span> '
