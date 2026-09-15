@@ -29,20 +29,21 @@ Other docs:
 
 ## Setup
 
-Allow about fifteen minutes, most of it on Google's account pages.
+Everything happens in a web browser and takes about fifteen minutes, a little
+longer if you create a second Gmail account in step 3. You'll need a GitHub
+account and a Google account.
 
 ### 1. Fork the repo
 
-Click **Fork** at the top of this page. The workflow runs in your fork, so you
-need your own copy on GitHub. If you want to edit files on your computer, clone
-the fork:
+Click **Fork** at the top of this page, then **Create fork**. The workflow runs
+in your own copy on GitHub. You don't need to download anything, because every
+file can be edited on GitHub (step 5 shows how).
 
-```bash
-git clone https://github.com/<your-username>/AI-Daily-Digest.git
-```
-
-Public repos get unlimited Actions minutes. A private repo uses your plan's
-monthly allowance, and a daily run only needs a few minutes of it.
+A fork of a public repo is always public, and public repos get Actions minutes
+for free. Anyone can see your `topics.json`, but the keys you add in step 4
+stay hidden. For a private copy, create a new private repository on GitHub and
+choose **Import a repository**, giving it this repo's URL. A private repo uses
+your plan's monthly Actions minutes, and a daily run only needs a few.
 
 ### 2. Get a Gemini API key
 
@@ -55,14 +56,29 @@ project. Some accounts need to verify a phone number first.
 
 ### 3. Create a Gmail App Password
 
-The script signs in to Gmail with an App Password, a separate password made
-for one app. Google only offers them when 2-Step Verification is on.
+The digest is sent from a Gmail account. The script signs in to it with an App
+Password, which is a separate password made for one app.
+
+> [!IMPORTANT]
+> **Do you read your email in Gmail?** Gmail only folds stories to one line
+> when the digest comes from a different address than the one you read. If you
+> want that, create the App Password in a second Gmail account that just sends
+> the digest, not in the account you read. You can make a free one at
+> [accounts.google.com/signup](https://accounts.google.com/signup).
+> [Step 8](#8-collapsible-stories-in-gmail) finishes the setup.
+>
+> If you read your email in another app, or you don't mind every story showing
+> open in Gmail, use your own account.
+
+In the account that will send the digest:
 
 1. Turn on 2-Step Verification at
    [myaccount.google.com/security](https://myaccount.google.com/security).
+   App Passwords only appear once it's on.
 2. Open [myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords),
-   name it `daily-digest` and create it.
-3. Copy the 16-character password.
+   name it `daily-digest` and click **Create**.
+3. Copy the 16-character password straight away, because Google only shows it
+   once. It works with or without the spaces.
 
 If Google says App Passwords aren't available, the account is probably a work
 or school account, or it uses Advanced Protection or security keys only. A
@@ -70,38 +86,68 @@ personal account that verifies with your phone or an authenticator app works.
 
 ### 4. Add the secrets
 
-In your fork, open **Settings > Secrets and variables > Actions** and add each
-of these with **New repository secret**:
+In your fork, open **Settings > Secrets and variables > Actions**. Click
+**New repository secret** for each row below, and copy each name as it's
+written.
 
 | Secret | Value |
 |---|---|
 | `GEMINI_API_KEY` | The key from step 2 |
-| `GMAIL_ADDRESS` | The Gmail address the App Password belongs to |
+| `GMAIL_ADDRESS` | The sending Gmail address from step 3 |
 | `GMAIL_APP_PASSWORD` | The App Password from step 3 |
-| `RECIPIENT_EMAIL` | Where the digest goes. It can match `GMAIL_ADDRESS`, but step 7 needs a different address. |
+| `RECIPIENT_EMAIL` | The address you want the digest delivered to. It can be any email address. |
 | `GROQ_API_KEY` | Optional, see [a backup model](#a-backup-model) |
 
-### 5. Run it once
+If you set up a second Gmail account to send from, `RECIPIENT_EMAIL` is the
+address you read. Without `RECIPIENT_EMAIL`, the digest goes to
+`GMAIL_ADDRESS`.
 
-1. Open the **Actions** tab and enable workflows if GitHub asks.
-2. Choose **Daily News Digest**, then **Run workflow**.
-3. When the run finishes, the last line of its log should read `Done.`
-4. Check your inbox, and your spam folder the first time.
+### 5. Set your time zone and delivery time
 
-From then on it runs every morning.
+The digest comes set up for 8:00 AM Sydney time. To change that, edit two files
+in your fork. On GitHub, open the file, click the pencil icon, make the change
+and click **Commit changes**.
 
-### 6. Let the keepalive job push
+1. In `topics.json`, near the bottom, change `"timezone"` to your
+   [time zone name](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones),
+   such as `"Europe/London"` or `"America/New_York"`. It sets the date shown in
+   the email.
+2. In `.github/workflows/daily-digest.yml`, change `timezone` to the same name.
+   To change the hour, edit `cron: "0 8 * * *"`. The first number is the minute
+   and the second is the hour, so `"30 6 * * *"` sends at 6:30 AM.
+
+### 6. Turn on the workflows and run it once
+
+GitHub switches off the workflows in a new fork until you turn them on.
+
+1. Open the **Actions** tab and click **I understand my workflows, go ahead and
+   enable them**.
+2. In the list on the left, click **Daily News Digest**. If a banner says the
+   scheduled workflow is disabled, click **Enable workflow**. Do the same for
+   **Keepalive**.
+3. On **Daily News Digest**, click **Run workflow**, then the green **Run
+   workflow** button that appears.
+4. The run takes a few minutes. When it finishes, click it, click
+   **send-digest**, and open the **Run digest script** step to see the log. The
+   last line should read `Done.`
+5. Check the inbox of `RECIPIENT_EMAIL`. The first digest may land in spam, so
+   mark it as not spam to keep the next ones in your inbox.
+
+After that, the digest arrives every morning at the time you set in step 5.
+
+### 7. Let the keepalive job push
 
 GitHub turns off scheduled workflows in a public repo after 60 days with no
-activity. The `Keepalive` workflow makes an empty commit once a month to
-prevent that, and it needs permission to push:
+activity. The **Keepalive** workflow makes an empty commit once a month to
+prevent that, and it needs permission to push. In your fork, go to
+**Settings > Actions > General**, choose **Read and write permissions** under
+**Workflow permissions**, and click **Save**.
 
-**Settings > Actions > General > Workflow permissions > Read and write permissions**
+Without this setting the keepalive run fails, and you'd have to commit
+something yourself every couple of months. A private copy doesn't need this
+step.
 
-Without this setting the keepalive run fails, and you'd have to push a commit
-yourself every couple of months.
-
-### 7. Collapsible stories in Gmail
+### 8. Collapsible stories in Gmail
 
 This step is optional. Apple Mail, Yahoo, Samsung Email, Thunderbird and
 Fastmail fold each story to one line with no setup. Gmail needs the steps
@@ -112,9 +158,10 @@ what each mail app does.
 Gmail only folds stories in an email from a different address, and only from
 a sender you've approved.
 
-1. Create a second Gmail account, or use one you already have, and make an App
-   Password for it as in step 3. Set `GMAIL_ADDRESS` and `GMAIL_APP_PASSWORD`
-   to that account and `RECIPIENT_EMAIL` to the address you read.
+1. If you used the account you read in step 3, create a second Gmail account
+   and make an App Password in it the same way. Update the `GMAIL_ADDRESS` and
+   `GMAIL_APP_PASSWORD` secrets to that account, and set `RECIPIENT_EMAIL` to
+   the address you read.
 2. On a computer, open gmail.com in the account you read. Go to **Settings >
    See all settings > General** and change these:
    - set **Images** to **Always display external images**
@@ -127,6 +174,9 @@ Each digest stays folded in Gmail for 30 days after it arrives. After that,
 Gmail shows the message fully open.
 
 ## Customising
+
+To change a file, open it in your fork on GitHub, click the pencil icon and
+then **Commit changes**. The next run uses the new version.
 
 ### Topics and feeds
 
@@ -144,9 +194,10 @@ to read, and the most stories it can include:
 }
 ```
 
-Copy a block to add a topic and delete one to remove it. A topic without
-`max_stories` gets up to five stories. Articles about the same event are
-merged, so a quiet day can come in under the limit.
+Copy a block to add a topic and delete one to remove it. The blocks in the
+`topics` list need a comma between them, with no comma after the last one. A
+topic without `max_stories` gets up to five stories. Articles about the same
+event are merged, so a quiet day can come in under the limit.
 
 [FEEDS.md](FEEDS.md) has blocks to paste in for about fifty subjects, from
 sport and finance down to single interests like Formula 1 or anime. It also
@@ -176,7 +227,8 @@ clipping](HOW-IT-WORKS.md#email-length-and-gmail-clipping) has measurements.
 To run a second set of topics, copy `.github/workflows/daily-digest.yml` to a
 new file and change its `name`. In its last step, add
 `DIGEST_CONFIG_PATH: topics-2.json` under `env`, then create `topics-2.json`
-next to `topics.json`.
+next to `topics.json`. Check in the **Actions** tab that the new workflow is
+enabled.
 
 ### Settings
 
@@ -200,24 +252,23 @@ These go in the `settings` block at the end of `topics.json`:
 | `fact_of_the_day` | `false` removes the fact from the top of the email. |
 | `collapsible_stories` | `false` sends every story fully open. |
 
-A mistake in `topics.json` stops the run with a message that names the topic
-and the field to fix.
+A mistake in `topics.json` stops the run with a message that says what to fix.
 
 ### Delivery time
 
 The schedule is set in
-[.github/workflows/daily-digest.yml](.github/workflows/daily-digest.yml). It
-runs at 8:00 AM Sydney time:
+[.github/workflows/daily-digest.yml](.github/workflows/daily-digest.yml):
 
 ```yaml
 - cron: "0 8 * * *"
   timezone: "Australia/Sydney"
 ```
 
-Change the hour and time zone to suit you, and set `timezone` in `topics.json`
-to match so the date in the email lines up. GitHub adjusts for daylight saving.
+[Step 5](#5-set-your-time-zone-and-delivery-time) covers changing it. Keep
+`timezone` here and in `topics.json` the same, so the date in the email matches
+the day it's sent. GitHub adjusts for daylight saving, and
 [crontab.guru](https://crontab.guru) helps with cron syntax. Scheduled runs can
-start a few minutes late when GitHub is busy.
+start late when GitHub is busy.
 
 ### A backup model
 
@@ -239,29 +290,45 @@ puts one model at the front and keeps the defaults behind it.
 
 ## Troubleshooting
 
-Start with the log of the run in the **Actions** tab. Most problems are
+Start with the log of the run. In the **Actions** tab, click the run, then
+**send-digest**, then the **Run digest script** step. Most problems are
 reported there.
 
 ### No email arrived
 
-Check your spam folder, then the end of the log. A wrong App Password or a
-rejected Gmail sign-in is reported there.
+If the run shows a red cross, open its log. If it succeeded, check the spam
+folder of `RECIPIENT_EMAIL`. A wrong App Password or a rejected Gmail sign-in
+is reported at the end of the log.
+
+### It worked once but doesn't run every morning
+
+In the **Actions** tab, click **Daily News Digest**. If a banner says the
+workflow is disabled, click **Enable workflow**. GitHub disables scheduled
+workflows in new forks, and in public repos after 60 days without activity,
+which [step 7](#7-let-the-keepalive-job-push) prevents. Scheduled runs can
+also start late when GitHub is busy.
 
 ### Gmail rejects the sign-in
 
-Use the App Password, not your normal Google password, and check that 2-Step
+Use the App Password, not your normal Google password. Check that
+`GMAIL_ADDRESS` is the account the App Password was made in, and that 2-Step
 Verification is still on.
+
+### The run stops with a `JSONDecodeError`
+
+`topics.json` isn't valid JSON. The message gives a line and column, and the
+problem is usually a missing or extra comma or quote just before that point.
+
+### The run stops with a `ValueError` about `topics.json`
+
+Something in the file has the wrong type, such as `feeds` written as one
+string instead of a list. The message names the topic and field.
 
 ### A topic is empty
 
 Look for `found 0 raw articles` under the topic's name in the log. A feed may
 have stopped working. [FEEDS.md](FEEDS.md#known-dead) lists feeds known to be
 dead.
-
-### The run stops with a `ValueError` about `topics.json`
-
-Something in the file has the wrong type, such as `feeds` written as one
-string instead of a list. The message names the topic and field.
 
 ### Gemini returns 429
 
@@ -289,7 +356,7 @@ headlines in place of a briefing.
 
 ### Stories don't fold in Gmail
 
-Go back over [step 7](#7-collapsible-stories-in-gmail). The log warns if
+Go back over [step 8](#8-collapsible-stories-in-gmail). The log warns if
 `GMAIL_ADDRESS` and `RECIPIENT_EMAIL` are the same, or if the folding version
 was too large to send.
 
@@ -308,11 +375,12 @@ the model follows.
 ## Security
 
 Keep keys out of the repo and store them only as Actions secrets. Anyone can
-see `topics.json` in a public fork, but secrets stay hidden.
+see `topics.json` in a public repo, but secrets stay hidden.
 
 Treat the App Password like your Google password, because it can sign in to
 your account through mail apps. You can revoke it from your Google Account at
-any time without changing your main password.
+any time without changing your main password. A second Gmail account used only
+for sending keeps your main account out of this entirely.
 
 ## Contributing
 

@@ -207,7 +207,7 @@ leave a story stuck closed.
 
 | App | Stories |
 |---|---|
-| Gmail on the web and in its apps, after [setup](README.md#7-collapsible-stories-in-gmail) | Folded (AMP) for 30 days after arrival |
+| Gmail on the web and in its apps, after [setup](README.md#8-collapsible-stories-in-gmail) | Folded (AMP) for 30 days after arrival |
 | Apple Mail on Mac, iPhone and iPad | Folded |
 | Yahoo Mail, Samsung Email, Thunderbird, Fastmail | Folded |
 | Outlook.com and Outlook for Mac, iPhone and Android | Probably folded, support is partial |
