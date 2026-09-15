@@ -280,6 +280,7 @@ def test_collapsible_copy_is_sent_by_default(write_config, mail_env, sent, fake_
     [amp] = sent.amp
     assert "<amp-accordion" in amp and "Tech lead story" in amp
     assert "Collapsible version is" in capsys.readouterr().out
+    assert 'type="checkbox"' in sent[0][1]
 
 
 def test_collapsible_copy_can_be_turned_off(write_config, mail_env, sent, fake_pipeline):
@@ -287,6 +288,7 @@ def test_collapsible_copy_can_be_turned_off(write_config, mail_env, sent, fake_p
     digest.main()
     assert sent.amp == [None]
     assert len(sent) == 1
+    assert "<input" not in sent[0][1] and "<style" not in sent[0][1]
 
 
 def test_oversized_collapsible_copy_is_dropped_not_sent_broken(write_config, mail_env, sent,

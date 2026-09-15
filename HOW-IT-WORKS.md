@@ -216,21 +216,50 @@ palette avoids pure black and white, which invert worst.
 
 ## Collapsible stories
 
-Gmail has no way to collapse part of an ordinary HTML email. It rewrites
-`<details>` and `<summary>` into plain tags, it doesn't support the `:checked`
-selector that CSS-only accordions depend on, and in-email jump links do
-nothing in its mobile apps. The one format Gmail will collapse is AMP for
-Email, so each digest carries two copies:
+No single technique folds an email in every mail app, so the digest layers
+two, and each app gets whichever one it supports. Where neither works,
+stories are shown in full.
 
-| Copy | Shown by | Stories |
-|---|---|---|
-| AMP (`text/x-amp-html`) | Gmail web and apps, for 30 days | One line each, tap to open |
-| HTML (`text/html`) | Every other client, and Gmail after 30 days | Fully expanded |
+**AMP, for Gmail.** Gmail won't fold ordinary HTML. It rewrites `<details>`
+and `<summary>` into plain tags and ignores the `:checked` selector. The one
+format it will fold is AMP for Email, so each digest also carries an AMP copy
+built with `amp-accordion`.
 
-Both are built from the same briefings, and a test checks that every
-subheading, paragraph, source and link in the full copy also appears in the
-collapsible one. The topic overviews and the fact of the day stay open in
-both, since they're the quick read.
+**A checkbox, for most other apps.** The regular HTML email folds each story
+with a hidden checkbox, a label that toggles it, and one CSS rule that hides
+the story body while the box is ticked. Two details mean an app that only
+half supports this can never hide a story for good:
+
+- The box starts ticked, and the only rule that hides anything requires
+  `input:checked`. An app that ignores `:checked` never matches it, so it
+  shows every story open. The obvious version, hidden by default and shown on
+  `:checked`, would lock every story shut in Gmail, which keeps `display:none`
+  but drops `:checked`.
+- The label wraps the checkbox rather than pointing at it by id. Some apps
+  rewrite ids, which would break the link and leave a story stuck closed.
+
+| App | What you get |
+|---|---|
+| Gmail web and apps, with [the setup](README.md#7-collapsible-stories-in-gmail) | Folded (AMP), for 30 days after a digest arrives |
+| Apple Mail, iPhone and iPad Mail | Folded (checkbox) |
+| Yahoo Mail, Samsung Email, Thunderbird, Fastmail | Folded (checkbox) |
+| Outlook.com, Outlook for Mac, iOS and Android | Probably folded; they support the technique only partly |
+| Gmail without the setup, Outlook for Windows, Proton Mail, HEY | Every story in full |
+
+The support data comes from caniemail.com. The checkbox version was also
+tested in real Chromium and WebKit engines (WebKit is what Apple Mail
+renders with), at desktop and phone widths. Stories start folded, tapping a
+subheading opens and closes one, a source link opens without folding its
+story, and with the stylesheet removed every story is open. It hasn't been
+tried in each app on a real device, so if one you use misbehaves, set
+`collapsible_stories` to `false`.
+
+Because the label wraps the whole story, tapping a story's own text folds it
+again, the same as tapping its subheading. Links inside it work as normal.
+
+Both versions come from the same briefings, and tests check that every
+subheading, paragraph, source and link in the expanded email is also in each
+collapsible one. Topic overviews and the fact of the day are never folded.
 
 Gmail only renders the AMP copy when the sender and recipient are different
 addresses and the recipient has approved the sender, which is why the setup

@@ -1302,7 +1302,67 @@ def _fact_block(fact):
     )
 
 
-def build_html(topic_results, date_str, fact=None):
+# Collapsing stories in the regular HTML email, for the apps that can.
+#
+# There's no JavaScript in email, so this is the checkbox technique: a hidden
+# checkbox, a <label> that toggles it, and CSS that hides the story body while
+# the box is ticked. Two details keep it from ever losing information in an
+# app that only half supports it:
+#
+# - The box starts ticked, and the only rule that hides anything requires
+#   input:checked. An app that ignores :checked (Gmail's regular HTML view,
+#   Outlook for Windows, Proton Mail) never matches it, so every story stays
+#   open there. The obvious version, hiding by default and showing on
+#   :checked, would leave stories permanently hidden in Gmail, which keeps
+#   display:none but drops :checked.
+# - The label wraps the checkbox rather than pointing at it with for= and an
+#   id. Some apps rewrite ids, which would break the link and leave a story
+#   stuck closed in an app that does support :checked.
+#
+# :checked sits on a bare input type selector because Outlook.com and
+# Outlook's apps only support it that way, and there are no CSS comments
+# because Yahoo ignores the rule after one.
+_COLLAPSE_CSS = (
+    "<style>"
+    ".dd-story input:checked ~ .dd-body { display:none !important; }"
+    ".dd-story input:checked ~ .dd-head .dd-more { display:inline !important; }"
+    "</style>"
+)
+
+
+def _collapsible_story_html(story, sources_label):
+    """
+    One story in the regular HTML email, folded to its subheading where the
+    app supports it and fully open everywhere else. A story with nothing
+    beneath its subheading is rendered as a plain line, since a tap that
+    opens nothing is worse than no tap at all.
+    """
+    label = html.escape(_story_label(story))
+    body = _paragraphs_to_html((story.get("detail") or "").strip()) + _sources_html(
+        story.get("sources") or [], sources_label
+    )
+    head_style = (
+        f"display:block;padding:13px 0;font-size:16px;font-weight:700;"
+        f"color:{_TEXT_HEADING};line-height:1.35;"
+    )
+    if not body:
+        return (
+            f'<div style="border-top:1px solid {_BORDER};">'
+            f'<div style="{head_style}">{label}</div></div>'
+        )
+    return (
+        f'<div class="dd-story" style="border-top:1px solid {_BORDER};">'
+        f'<label style="display:block;cursor:pointer;">'
+        f'<input type="checkbox" checked style="display:none;mso-hide:all;">'
+        f'<span class="dd-head" style="{head_style}">{label}'
+        f'<span class="dd-more" style="display:none;font-size:13px;font-weight:500;'
+        f'color:{_ACCENT};white-space:nowrap;"> &nbsp;+&nbsp;Read&nbsp;more</span></span>'
+        f'<span class="dd-body" style="display:block;padding:0 0 14px 0;cursor:auto;">{body}</span>'
+        f"</label></div>"
+    )
+
+
+def build_html(topic_results, date_str, fact=None, collapsible=False):
     sections = []
     failed_topics = []
     topic_names = []
@@ -1330,7 +1390,16 @@ def build_html(topic_results, date_str, fact=None):
             )
 
         stories_html = ""
-        for story in brief.get("stories") or []:
+        if collapsible and not degraded:
+            folded = brief.get("stories") or []
+            if folded:
+                stories_html = '<div style="margin-top:14px;">' + "".join(
+                    _collapsible_story_html(story, "Sources") for story in folded
+                ) + "</div>"
+            plain_stories = []
+        else:
+            plain_stories = brief.get("stories") or []
+        for story in plain_stories:
             subheading = (story.get("subheading") or "").strip()
             detail = (story.get("detail") or "").strip()
             sources = story.get("sources") or []
@@ -1398,6 +1467,7 @@ def build_html(topic_results, date_str, fact=None):
       <meta name="color-scheme" content="light">
       <meta name="supported-color-schemes" content="light">
       <title>Your Daily Digest</title>
+      {_COLLAPSE_CSS if collapsible else ""}
     </head>
     <body style="margin:0;padding:0;background:{_PAGE_BG};">
       <div style="display:none;max-height:0;overflow:hidden;opacity:0;mso-hide:all;">
@@ -1840,12 +1910,15 @@ def main():
             print(f"  got a fact from {fact['field']}")
 
     date_str = now_local.strftime("%A, %d %B %Y")
-    html_body = build_html(topic_results, date_str, fact)
+    # One setting covers both ways of collapsing: the AMP copy for Gmail, and
+    # the checkbox version inside the regular email for everything else.
+    collapsible = settings.get("collapsible_stories", True)
+    html_body = build_html(topic_results, date_str, fact, collapsible=collapsible)
     subject = f"{subject_prefix} - {date_str}"
     check_email_size(html_body)
 
     amp_body = None
-    if settings.get("collapsible_stories", True):
+    if collapsible:
         amp_body = build_amp(topic_results, date_str, fact)
         amp_size = len(amp_body.encode("utf-8"))
         print(f"Collapsible version is {amp_size / 1024:.0f}KB (AMP allows {AMP_MAX_BYTES // 1000}KB)")

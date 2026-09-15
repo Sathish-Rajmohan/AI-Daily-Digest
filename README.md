@@ -17,8 +17,10 @@ Each email opens with one fact worth knowing, then a section per topic: a
 short overview of the day, then a subheading per development with a few
 plain-language paragraphs and its sources underneath. Articles covering the
 same event are fused into one entry rather than repeated as near-duplicates.
-In Gmail each development shows as a single line you tap to open, so the
-email stays short without leaving anything out ([step 7](#7-collapsible-stories-in-gmail)).
+In most mail apps each development shows as a single line you tap to open,
+so the email stays short without leaving anything out. Gmail needs a little
+setup for this ([step 7](#7-collapsible-stories-in-gmail)), and apps that
+can't fold stories at all show every one in full.
 
 Everything runs on free tiers.
 
@@ -111,10 +113,15 @@ yourself every couple of months.
 
 ### 7. Collapsible stories in Gmail
 
-Optional, but worth it if you read in Gmail. Each story then shows as one
-line, and tapping it opens the full write-up and sources. It works on
-gmail.com and in the Gmail apps. Every other mail app shows the full,
-expanded email, so nothing is lost either way.
+Stories fold to one line on their own in Apple Mail, iPhone Mail, Yahoo,
+Samsung Email, Thunderbird and Fastmail, and probably in Outlook.com and
+the Outlook apps for phone and Mac. Tapping a story's line opens its full
+write-up and sources. Outlook for Windows, Proton Mail and HEY can't fold
+stories, so they show every story in full and nothing is lost.
+
+Gmail is the exception. Its regular view can't fold anything, so it needs
+these steps to show the folded version on gmail.com and in the Gmail apps.
+Skip them and Gmail shows every story in full.
 
 Gmail only allows this from a sender other than yourself, and only from a
 sender you've approved:
