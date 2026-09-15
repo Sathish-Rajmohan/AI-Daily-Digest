@@ -123,10 +123,17 @@ sender you've approved:
    turn on 2-Step Verification, and make an App Password for it as in step 3.
    Set `GMAIL_ADDRESS` and `GMAIL_APP_PASSWORD` to that account, and
    `RECIPIENT_EMAIL` to the address you read.
-2. **Approve that sender in the Gmail you read.** Open **Settings → See all
-   settings → General**, find **Dynamic email**, make sure **Enable dynamic
-   email** is ticked, then open **Developer settings**, enter the sending
-   address, and save.
+2. **Approve that sender in the Gmail you read.** On a computer, open
+   gmail.com, click the **Settings** gear at the top right, then **See all
+   settings**. On the **General** tab:
+   - Set **Images** to **Always display external images**. Gmail won't show
+     dynamic email otherwise.
+   - Find **Dynamic email**, tick **Enable dynamic email**, and click
+     **Developer settings** next to it. Enter the sending address and click OK.
+   - Click **Save changes** at the bottom of the page.
+
+   **Developer settings** is on the web version, so do this step on a
+   computer.
 3. Run the workflow again. Tap a story's line to open it.
 
 Gmail shows the collapsible version for 30 days after a digest arrives, then
