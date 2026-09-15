@@ -22,6 +22,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
 from concurrent.futures import ThreadPoolExecutor
@@ -72,13 +73,76 @@ USER_AGENT = (
 def load_config():
     with open(CONFIG_PATH, "r", encoding="utf-8") as f:
         config = json.load(f)
-    if "topics" not in config or not isinstance(config["topics"], list):
+    if not isinstance(config, dict) or not isinstance(config.get("topics"), list):
         raise ValueError(f"{CONFIG_PATH} must contain a 'topics' array")
+    for index, topic in enumerate(config["topics"], start=1):
+        _check_topic(topic, index)
+    _check_settings(config.get("settings"))
     return config
 
 
+# The checks below exist because a typo in topics.json otherwise fails far
+# from where it was made, or not at all. A feeds value written as a single
+# string, for instance, gets iterated one character at a time, every "URL"
+# fails, and the topic quietly reports no new articles.
+
+def _check_topic(topic, index):
+    if not isinstance(topic, dict):
+        raise ValueError(
+            f"{CONFIG_PATH}: topic {index} must be an object with a name and a feeds list"
+        )
+
+    where = f"topic {index}"
+    name = topic.get("name")
+    if name is not None:
+        if not isinstance(name, str):
+            raise ValueError(f"{CONFIG_PATH}: {where} 'name' must be text")
+        where = f"topic {index} ({name!r})"
+
+    feeds = topic.get("feeds", [])
+    if not isinstance(feeds, list) or not all(isinstance(url, str) for url in feeds):
+        raise ValueError(f"{CONFIG_PATH}: {where} 'feeds' must be a list of feed URLs")
+
+    max_stories = topic.get("max_stories", 5)
+    if isinstance(max_stories, bool) or not isinstance(max_stories, int) or max_stories < 1:
+        raise ValueError(f"{CONFIG_PATH}: {where} 'max_stories' must be a whole number of 1 or more")
+
+
+def _check_settings(settings):
+    if settings is None:
+        return
+    if not isinstance(settings, dict):
+        raise ValueError(f"{CONFIG_PATH}: 'settings' must be an object")
+
+    lookback = settings.get("lookback_hours", 24)
+    if isinstance(lookback, bool) or not isinstance(lookback, (int, float)) or lookback <= 0:
+        raise ValueError(f"{CONFIG_PATH}: 'lookback_hours' must be a number above 0")
+
+    if not isinstance(settings.get("fact_of_the_day", True), bool):
+        raise ValueError(f"{CONFIG_PATH}: 'fact_of_the_day' must be true or false")
+
+    for key in ("email_subject_prefix", "timezone"):
+        if key in settings and not isinstance(settings[key], str):
+            raise ValueError(f"{CONFIG_PATH}: '{key}' must be text")
+
+
 def parse_entry_time(entry):
-    """Best-effort publish time from a feedparser entry."""
+    """
+    Best-effort publish time from a feedparser entry.
+
+    feedparser's own parsed structs come first. It resolves zone abbreviations
+    like EDT and PST and normalizes to UTC, whereas dateutil doesn't know
+    those abbreviations and hands back the wall-clock time as if it were UTC,
+    which put US feeds four to eight hours out against the lookback window.
+    The raw strings are only the fallback.
+    """
+    for key in ("published_parsed", "updated_parsed"):
+        struct = entry.get(key)
+        if struct:
+            try:
+                return datetime(*struct[:6], tzinfo=timezone.utc)
+            except (TypeError, ValueError, OverflowError):
+                pass
     for key in ("published", "updated", "created"):
         if key in entry:
             try:
@@ -88,14 +152,38 @@ def parse_entry_time(entry):
                 return dt.astimezone(timezone.utc)
             except (ValueError, TypeError, OverflowError):
                 pass
-    for key in ("published_parsed", "updated_parsed"):
-        struct = entry.get(key)
-        if struct:
-            try:
-                return datetime(*struct[:6], tzinfo=timezone.utc)
-            except (TypeError, ValueError, OverflowError):
-                pass
     return None
+
+
+def _clean_text(text):
+    """
+    Plain text from a feed field. Feeds hand titles and summaries back as
+    HTML, so once the tags are gone what's left still carries entities like
+    "&amp;" and "&#8217;", which would otherwise reach the model and, on the
+    headlines fallback, be escaped a second time and shown literally.
+    """
+    if not text:
+        return ""
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = html.unescape(text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _web_link(url):
+    """
+    The URL if it's an absolute http(s) link, otherwise an empty string.
+    Links come from whoever runs the feed and end up as href attributes in
+    the email, so a javascript: or data: link is dropped rather than
+    rendered, as is a relative one that would lead nowhere from an inbox.
+    """
+    url = (url or "").strip()
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return ""
+    if parts.scheme.lower() in ("http", "https") and parts.netloc:
+        return url
+    return ""
 
 
 def fetch_feed(feed_url):
@@ -151,7 +239,11 @@ def fetch_topic_articles(topic, lookback_hours):
             print(f"  [warn] feed unreadable, skipping: {feed_url}", file=sys.stderr)
             continue
 
-        source_name = parsed.feed.get("title", feed_url)
+        # An empty <title></title> would otherwise leave a blank where the
+        # outlet's name goes next to every source from this feed.
+        source_name = (
+            _clean_text(parsed.feed.get("title")) or urlsplit(feed_url).netloc or feed_url
+        )
         from_this_feed = []
 
         for entry in parsed.entries:
@@ -161,20 +253,16 @@ def fetch_topic_articles(topic, lookback_hours):
             if pub_time is not None and pub_time < cutoff:
                 continue
 
-            link = (entry.get("link") or "").strip()
+            link = _web_link(entry.get("link"))
             if link and link in seen_links:
                 continue
             if link:
                 seen_links.add(link)
 
-            summary = entry.get("summary", "") or entry.get("description", "")
-            # Strip tags so the model isn't fed raw HTML soup.
-            if summary and "<" in summary:
-                summary = re.sub(r"<[^>]+>", " ", summary)
-                summary = re.sub(r"\s+", " ", summary).strip()
+            summary = _clean_text(entry.get("summary", "") or entry.get("description", ""))
 
             from_this_feed.append({
-                "title": entry.get("title", "(untitled)"),
+                "title": _clean_text(entry.get("title")) or "(untitled)",
                 "link": link,
                 "summary": summary,
                 "source": source_name,
@@ -660,7 +748,18 @@ def _call_model(provider, model, prompt, topic_name, system, schema):
         code = resp.status_code
 
         if code == 200:
-            return spec["extract"](resp.json(), topic_name)
+            # A 200 isn't always the provider talking. A captive portal or a
+            # proxy's error page comes back as HTML, and letting that raise
+            # would end the whole chain instead of trying the next model.
+            try:
+                data = resp.json()
+            except ValueError:
+                print(f"  [warn] {label}: 200 but the body isn't JSON: {resp.text[:200]}", file=sys.stderr)
+                return None
+            if not isinstance(data, dict):
+                print(f"  [warn] {label}: 200 with an unrecognized body: {resp.text[:200]}", file=sys.stderr)
+                return None
+            return spec["extract"](data, topic_name)
 
         if code in (400, 404):
             # Wrong or retired model ID for this key. Every later call to it
@@ -815,7 +914,7 @@ def fetch_fact_of_the_day(today):
 
 def run_chain(build_prompt, system, schema, label):
     """
-    Walk the provider chain until a model answers, then parse its JSON.
+    Walk the provider chain until a model answers with JSON that parses.
 
     Each model that doesn't answer costs a few seconds rather than the
     minutes a same-model retry loop spends waiting on capacity that isn't
@@ -828,8 +927,6 @@ def run_chain(build_prompt, system, schema, label):
         print("  [error] no provider configured", file=sys.stderr)
         return None
 
-    text = None
-    answered_by = None
     for provider, model in chain:
         if provider in _disabled_providers or (provider, model) in _unusable_models:
             continue
@@ -843,29 +940,44 @@ def run_chain(build_prompt, system, schema, label):
             print(f"  [warn] dropping {provider}/{model} for this run ({e})", file=sys.stderr)
             _unusable_models.add((provider, model))
             continue
-        if text:
-            answered_by = (provider, model)
-            break
-        print(f"  [warn] {provider}/{model} didn't answer, trying the next model", file=sys.stderr)
+        if not text:
+            print(f"  [warn] {provider}/{model} didn't answer, trying the next model", file=sys.stderr)
+            continue
 
-    if not text:
-        print(f"  [error] no model answered for '{label}'", file=sys.stderr)
-        return None
+        # Parsed here rather than after the loop. These models fail
+        # structured output by truncating mid-JSON, and stopping at the first
+        # model that returned any text at all let one cut-off reply sink the
+        # topic with healthy models still untried below it. The model isn't
+        # retired for the run, since truncation is usually a one-off.
+        ok, value = _decode_reply(text)
+        if not ok:
+            print(
+                f"  [warn] could not parse {provider}/{model}'s JSON for {label} ({value}), "
+                "trying the next model",
+                file=sys.stderr,
+            )
+            print(f"  raw text: {text[:500]}", file=sys.stderr)
+            continue
 
-    if answered_by != chain[0]:
-        print(f"  [info] answered by fallback model {answered_by[0]}/{answered_by[1]}")
+        if (provider, model) != chain[0]:
+            print(f"  [info] answered by fallback model {provider}/{model}")
+        return value
 
+    print(f"  [error] no model answered for '{label}'", file=sys.stderr)
+    return None
+
+
+def _decode_reply(text):
+    """(True, decoded) for a reply that parses as JSON, (False, error)
+    otherwise. Tolerates a markdown code fence around the JSON."""
     if text.startswith("```"):
         text = text.strip("`")
         if text.lower().startswith("json"):
             text = text[4:].lstrip()
-
     try:
-        return json.loads(text)
+        return True, json.loads(text)
     except json.JSONDecodeError as e:
-        print(f"  [warn] could not parse the model's JSON for {label}: {e}", file=sys.stderr)
-        print(f"  raw text: {text[:500]}", file=sys.stderr)
-        return None
+        return False, e
 
 
 def summarize_topic(topic_name, articles, max_developments):
@@ -906,10 +1018,21 @@ def summarize_topic(topic_name, articles, max_developments):
         # is what Google recommends for a prompt built around a large data
         # block, and the tag gives the model an unambiguous boundary between
         # the data and what to do with it.
-        return f"""<articles topic="{topic_name}" outlets="{
-            len({a["source"] for a in list(by_id.values())[:cap]})
-        }">
-{json.dumps(numbered, ensure_ascii=False)}
+        #
+        # Titles and snippets come from whoever runs the feed, so one
+        # containing "</articles>" could otherwise end the fence early and
+        # have what follows read as instructions. Escaping the angle brackets
+        # as < and > decodes to the identical JSON, but leaves
+        # nothing inside that can close the tag. The topic name is escaped
+        # for the same reason, since it sits in an attribute.
+        outlets = len({a["source"] for a in list(by_id.values())[:cap]})
+        data = (
+            json.dumps(numbered, ensure_ascii=False)
+            .replace("<", "\\u003c")
+            .replace(">", "\\u003e")
+        )
+        return f"""<articles topic="{html.escape(topic_name, quote=True)}" outlets="{outlets}">
+{data}
 </articles>
 
 The articles above are cycled through the outlets, so every outlet is
@@ -996,9 +1119,8 @@ def _resolve_sources(article_ids, by_id, topic_name):
         return sources
 
     for raw in article_ids:
-        try:
-            article_id = int(raw)
-        except (TypeError, ValueError):
+        article_id = _as_article_id(raw)
+        if article_id is None:
             continue
         if article_id in seen:
             continue
@@ -1016,6 +1138,27 @@ def _resolve_sources(article_ids, by_id, topic_name):
             "outlet": article["source"],
         })
     return sources
+
+
+def _as_article_id(raw):
+    """
+    An integer id from whatever the model cited, or None. Digit strings and
+    whole-number floats are accepted. A fraction or a boolean is not: int()
+    would quietly turn 2.7 into 2 and True into 1, citing a real article the
+    model never pointed at.
+    """
+    if isinstance(raw, bool):
+        return None
+    if isinstance(raw, int):
+        return raw
+    if isinstance(raw, float):
+        return int(raw) if raw.is_integer() else None
+    if isinstance(raw, str):
+        try:
+            return int(raw.strip())
+        except ValueError:
+            return None
+    return None
 
 
 def headlines_only_brief(articles, max_developments):
@@ -1079,15 +1222,24 @@ def _sources_html(sources, label="Sources"):
     """The compact link list that sits under a story."""
     items = ""
     for s in sources or []:
-        title = html.escape(s.get("title", "(untitled)"))
-        link = html.escape(s.get("link", "#"), quote=True)
-        outlet = html.escape(s.get("outlet", ""))
+        title = html.escape(s.get("title") or "(untitled)")
+        link = _web_link(s.get("link"))
+        outlet = html.escape(s.get("outlet") or "")
         outlet_bit = f' <span style="color:{_TEXT_MUTED};">({outlet})</span>' if outlet else ""
+        # Checked again here as well as at fetch time, since this is where a
+        # link actually becomes an href. Without a usable link the title is
+        # still listed, just not clickable.
+        if link:
+            title_html = (
+                f'<a href="{html.escape(link, quote=True)}" style="color:{_ACCENT};'
+                f'text-decoration:none;font-weight:500;">{title}</a>'
+            )
+        else:
+            title_html = f'<span style="color:{_TEXT_BODY};font-weight:500;">{title}</span>'
         items += (
             f'<li style="margin:0 0 6px 0;">'
             f'<span style="color:{_ACCENT};">&#8250;</span> '
-            f'<a href="{link}" style="color:{_ACCENT};text-decoration:none;'
-            f'font-weight:500;">{title}</a>{outlet_bit}</li>'
+            f'{title_html}{outlet_bit}</li>'
         )
     if not items:
         return ""
@@ -1362,6 +1514,17 @@ def main():
         )
         sys.exit(1)
 
+    # A key alone isn't enough if its model list was overridden to nothing.
+    # Caught here, the run stops with a reason instead of crashing on the
+    # first topic after every feed has already been fetched.
+    if not build_model_chain():
+        print(
+            "ERROR: a provider key is set but it has no models to call. Check "
+            "that GEMINI_MODELS or GROQ_MODELS isn't set to an empty value.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
     config = load_config()
     settings = config.get("settings") or {}
     lookback_hours = settings.get("lookback_hours", 24)
@@ -1417,7 +1580,8 @@ def main():
             # headlines rather than an empty slot where the topic should be.
             fallback = headlines_only_brief(articles, max_developments)
             if fallback:
-                print(f"  no briefing; listing {len(fallback['sources'])} headlines instead")
+                n_headlines = len(fallback["stories"][0]["sources"])
+                print(f"  no briefing; listing {n_headlines} headlines instead")
                 topic_results.append((name, fallback, None))
             else:
                 print("  got no briefing")

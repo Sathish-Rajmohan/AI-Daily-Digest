@@ -247,3 +247,9 @@ and snippet, and cites by integer id. The title, link and outlet in the email
 are looked up from the fetched articles by that id, so nothing the model
 writes ends up in a URL. An id it invents resolves to nothing and is dropped
 with a warning in the log.
+
+The links themselves come from the feeds, so they get checked too. Only
+absolute `http` and `https` links become clickable; a `javascript:` or
+`data:` link, or a relative one that would lead nowhere from an inbox, is
+dropped and the headline is listed without a link. Feed text is also fenced
+off in the prompt so a headline can't pass itself off as an instruction.

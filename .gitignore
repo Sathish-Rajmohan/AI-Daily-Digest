@@ -14,3 +14,6 @@ Thumbs.db
 # Editor cruft
 .vscode/
 .idea/
+
+# Test runs
+.pytest_cache/

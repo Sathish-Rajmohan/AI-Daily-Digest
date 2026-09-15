@@ -200,6 +200,10 @@ SMTP auth failures all show up there.
 **Empty topic:** look for `found 0 raw articles`. The feed URL is probably
 dead. Check it against the [known-dead list](FEEDS.md#known-dead).
 
+**Run stops with a `ValueError` about topics.json:** there's a typo in the
+file, such as `feeds` written as a single string instead of a list. The
+message names the topic and the field to fix.
+
 **Gmail login rejected:** use an App Password, not your normal password, and
 confirm 2-Step Verification is on.
 
@@ -248,3 +252,14 @@ from your Google Account without changing your main password.
 
 Issues and PRs welcome: more topic presets, other LLM backends, Slack or
 Discord delivery, whatever fits.
+
+### Running the tests
+
+```bash
+pip install -r requirements-dev.txt
+python -m pytest
+```
+
+The suite takes a couple of seconds and needs no keys or network access.
+HTTP, SMTP and the clock are all faked, so it runs the same offline as it
+does anywhere else.
