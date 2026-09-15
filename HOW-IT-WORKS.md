@@ -87,21 +87,42 @@ a quiet day produces fewer entries rather than padded ones.
 
 ## The fact of the day
 
-Above the news, each email opens with one fact and a short note on why it is
-worth knowing.
+Above the news, each email opens with one fun fact and a short answer to "how
+come?". It's meant to take about ten seconds and make sense on the first
+read.
 
-A model left to choose freely returns to the same handful of chestnuts, so
-the request is narrowed on two axes at once. The date picks one of fourteen
-fields, and separately one of eleven angles of approach: a hard limit and
-what sets it, a historical accident that still shapes something, two things
-that share a cause, and so on. Eleven and fourteen share no factors, so a
-given field-and-angle pair does not come back for 154 days rather than
-repeating every fortnight.
+The prompt is built from what makes a fact land and stay with someone:
 
-The angle is the part doing the work. A field on its own is a broad ask, and
-asked the same broad way it returns that field's most famous fact; pairing it
-with an angle usually makes the obvious answer not fit. The prompt also names
-the well-worn circuit to avoid outright, and lets the model drop the angle
+- **Surprise on something familiar.** Curiosity comes from a gap in something
+  you half know. A twist on an everyday thing opens that gap; a fact about
+  something you've never heard of doesn't.
+- **Concrete, and one idea.** Something you can picture, like an object, an
+  animal or a number. No abstract mechanisms, theories or policy.
+- **Plain words.** Plain-language guidance puts writing for a general
+  audience at about an 8th-grade reading level, so the prompt asks for
+  something a curious 12-year-old could follow. Technical terms and the
+  names of concepts are left out, not explained.
+- **Numbers beside a comparison.** People recall and estimate figures
+  substantially better when they come with a familiar comparison, and round
+  numbers are easier to hold than exact ones.
+- **Hard word limits.** The fact is one sentence of 25 words or fewer, and the
+  explanation two or three short sentences of 40 words or fewer. Each run
+  logs both counts and warns when either limit is broken.
+
+The prompt ends with a worked example: a real fact this digest once sent (79
+words, "zero lower bound", three ideas stacked into it) beside a rewrite of
+the same idea in 48 plain words. A test checks both word counts, and checks
+that the rewrite scores at or below an 8th-grade reading level while the
+original scores well above it.
+
+A model left to choose freely also returns to the same handful of chestnuts,
+so the request is narrowed on two axes. The date picks one of fourteen
+fields and, separately, one of eleven everyday angles: a number that sounds
+wrong but is true, an accident that led to something people use, a word with
+a surprising origin, and so on. Eleven and fourteen share no factors, so a
+field-and-angle pair doesn't come back for 154 days. An earlier set of
+angles asked for things like "a hard limit, and what sets it", which invited
+exactly the dense, abstract facts this replaced. The model can drop an angle
 rather than force a bad match to it.
 
 This is the only part of the email not grounded in a fetched article. It
@@ -196,21 +217,53 @@ Gmail renders about 102KB of HTML and hides the rest behind a "View entire
 message" link. That link still shows everything, but it takes a click. Each
 run prints the size it used.
 
-| Config | Stories | Size | |
+| Config | Stories | Size, stories folded | |
 |---|---|---|---|
-| stock, as shipped | 39 | ~75KB | 73% of the budget |
-| 5 topics x 6 | 30 | ~60KB | fine |
-| 8 topics x 6 | 48 | ~94KB | warns in the log |
-| 10 topics x 8 | 80 | ~153KB | Gmail clips it |
+| stock, as shipped | 39 | ~89KB | 87% of the budget |
+| 5 topics x 6 | 30 | ~70KB | fine |
+| 8 topics x 6 | 48 | ~110KB | Gmail clips it |
+| 10 topics x 8 | 80 | ~178KB | Gmail clips it |
 
-Past the limit, drop `max_stories`, or split the topics across two runs by
-adding a second workflow with its own `topics.json`.
+Those figures use deliberately heavy test content: every story at full
+length with three sources, and every topic at its `max_stories` ceiling.
+Real days usually come in smaller. Folding costs some bytes per story, so
+the same digest with `collapsible_stories` off is about a sixth smaller. The
+AMP copy has its own, much larger 200KB allowance and isn't the constraint.
+
+Past the limit, drop `max_stories`, turn off `collapsible_stories`, or split
+the topics across two runs by adding a second workflow with its own
+`topics.json`.
 
 Styling is inline rather than in a `<style>` block because Gmail strips those
 for non-Gmail recipients, and the layout is table-based because Outlook
 renders mail with the Word engine. The email is deliberately light-only:
 Gmail's mobile apps invert colours in dark mode regardless of any CSS, so the
 palette avoids pure black and white, which invert worst.
+
+### The look
+
+The design stays minimal and puts its character in things that carry
+information:
+
+- **An ink per topic.** Each topic gets a deep, muted colour (teal, oxblood,
+  indigo, moss, ochre, plum) for its name, its links and its "Read more"
+  cue, assigned by its position in `topics.json` so it stays the same day to
+  day. On a long scroll that tells you which section you're in.
+- **A masthead that counts.** Under the title sits a line like "39 stories
+  from 67 outlets · about 4 min to skim", then a thin strip split into the
+  topic inks, each segment sized by that topic's share of the day's stories,
+  with a key beneath it. Every figure is counted from that email.
+- **Two typefaces with jobs.** Georgia, the one serif every mail app has, for
+  the title, the topic names and the fact; the system sans for everything
+  you read at length. Web fonts are out, since Gmail and Outlook ignore them.
+- **The fact set as a statement.** Large serif type rather than a boxed
+  card, so it reads as the thing worth pausing on.
+
+Every text colour clears WCAG AA contrast against the card, and a test holds
+that. Font names in the stacks are single-quoted: a double quote inside a
+double-quoted `style` attribute ends the attribute early and silently drops
+the whole font declaration, which an earlier version did, so every client
+fell back to its default font. A test checks for that too.
 
 ---
 

@@ -93,7 +93,7 @@ def test_no_sources_gives_nothing():
 def test_sources_render_title_link_outlet_and_label():
     out = digest._sources_html([source(1)], label="Stories")
     assert 'href="https://news.example/1"' in out
-    assert ">Source 1</a> <span" in out and "(Outlet 1)" in out
+    assert "&#8250;&nbsp;Source 1</a> (Outlet 1)</li>" in out
     assert ">Stories</div>" in out
 
 
@@ -194,7 +194,7 @@ def test_topics_render_in_order_with_their_content():
     body = out[out.index(DATE):]
     assert body.index("Tech overview.") < body.index("Tech story 1") < body.index("World overview.")
     assert "Second para 2." in out
-    assert "In today's digest: Tech, World" in out
+    assert out.count("&#9632;") == 2
     assert DATE in out
 
 
@@ -239,13 +239,13 @@ def test_only_topics_with_a_note_appear_in_the_skipped_notice():
     out = digest.build_html(results, DATE)
     assert "Skipped this run: Broken &amp; Co." in out
     assert "Quiet" not in out
-    assert "In today's digest: Tech</div>" in out
+    assert out.count("&#9632;") == 1
 
 
 def test_no_topics_at_all_gives_the_empty_notice():
     out = digest.build_html([("Quiet", None, None)], DATE)
     assert "No new stories found in the lookback window." in out
-    assert "In today's digest" not in out
+    assert "&#9632;" not in out
     assert "Skipped this run" not in out
 
 
@@ -262,7 +262,7 @@ def test_styles_are_inline_and_the_output_is_compact():
     out = digest.build_html([("Tech", brief(), None)], DATE)
     assert "<style" not in out
     assert "\n" not in out and "  " not in out
-    assert "</a> <span" in out
+    assert "</a> (Outlet 1)" in out
 
 
 def test_preheader_is_hidden_and_escaped():
@@ -278,6 +278,109 @@ def test_story_without_subheading_or_sources_still_renders_detail():
     out = digest.build_html([("Tech", b, None)], DATE)
     assert "Just detail." in out
     assert ">Sources</div>" not in out
+
+
+# --------------------------------------------------------------------------
+# Palette, type, and the topic inks
+# --------------------------------------------------------------------------
+
+def _luminance(hex_colour):
+    channels = [int(hex_colour[i:i + 2], 16) / 255 for i in (1, 3, 5)]
+    linear = [c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4 for c in channels]
+    return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+
+
+def _contrast(a, b):
+    lighter, darker = sorted((_luminance(a), _luminance(b)), reverse=True)
+    return (lighter + 0.05) / (darker + 0.05)
+
+
+@pytest.mark.parametrize("colour", [digest._TEXT_HEADING, digest._TEXT_BODY, digest._TEXT_MUTED,
+                                    digest._ACCENT, *digest._TOPIC_INKS])
+def test_every_text_colour_meets_wcag_aa_on_the_card(colour):
+    assert _contrast(colour, digest._CARD_BG) >= 4.5
+
+
+def test_topic_inks_are_distinct_and_enough_for_the_shipped_topics():
+    assert len(set(digest._TOPIC_INKS)) == len(digest._TOPIC_INKS) >= 5
+
+
+class _Attributes(HTMLParser):
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.names = set()
+        self.font_families = []
+
+    def handle_starttag(self, tag, attrs):
+        for name, value in attrs:
+            self.names.add(name)
+            if name == "style" and value and "font-family:" in value:
+                self.font_families.append(value.split("font-family:", 1)[1].split(";", 1)[0])
+
+
+# A font stack written with double quotes ("Segoe UI") inside a double-quoted
+# style attribute ends the attribute early. The rest of the stack turns into
+# junk attribute names and the font-family declaration is dropped, so every
+# client quietly fell back to its default font.
+def test_font_stacks_survive_inside_style_attributes():
+    degraded = digest.headlines_only_brief([{"title": "H", "link": "https://x.example/", "source": "S"}], 3)
+    out = digest.build_html([("Tech", brief(), None), ("World", degraded, None), ("Broken", None, "n")],
+                            DATE, {"field": "physics", "fact": "F.", "why": "W."}, collapsible=True)
+    parser = _Attributes()
+    parser.feed(out)
+    allowed = {"style", "href", "class", "type", "checked", "role", "width", "height", "cellpadding",
+               "cellspacing", "border", "align", "bgcolor", "name", "content", "charset"}
+    assert parser.names <= allowed, parser.names - allowed
+    assert len(parser.font_families) >= 3
+    for stack in parser.font_families:
+        assert stack.strip().endswith(("sans-serif", "serif")), stack
+        assert '"' not in stack
+
+
+def test_each_topic_keeps_its_ink_by_position_even_past_a_skipped_topic():
+    out = digest.build_html([("Alpha", brief("Alpha"), None), ("Broken", None, "failed"),
+                             ("Gamma", brief("Gamma"), None)], DATE)
+    inks = digest._TOPIC_INKS
+    assert f'color:{inks[0]};">Alpha</div>' in out
+    assert f'color:{inks[2]};">Gamma</div>' in out
+    assert f'color:{inks[1]};">' not in out
+    assert f'href="https://news.example/1" style="color:{inks[2]};' in out
+
+
+def test_masthead_strip_splits_by_share_of_stories():
+    out = digest.build_html([("Big", brief("Big", 3), None), ("Small", brief("Small", 1), None)], DATE)
+    assert 'width="75.0%"' in out and 'width="25.0%"' in out
+    assert f'bgcolor="{digest._TOPIC_INKS[0]}"' in out and f'bgcolor="{digest._TOPIC_INKS[1]}"' in out
+
+
+def test_no_strip_index_or_counts_without_stories():
+    out = digest.build_html([("Quiet", None, None)], DATE)
+    assert "bgcolor" not in out and "&#9632;" not in out and " min " not in out
+
+
+def test_masthead_counts_what_is_in_the_email():
+    results = [("Tech", brief("Tech", 3), None), ("World", brief("World", 1), None)]
+    plain = digest.build_html(results, DATE)
+    folded = digest.build_html(results, DATE, collapsible=True)
+    assert "4 stories from 3 outlets · about 1 min read" in plain
+    assert "4 stories from 3 outlets · about 1 min to skim" in folded
+    assert "3 stories · 3 outlets" in plain and "1 story · 1 outlet" in plain
+    assert "Drawn from 3 outlets." in plain
+
+
+def test_headline_fallback_topic_is_counted_in_headlines():
+    degraded = digest.headlines_only_brief(
+        [{"title": "H1", "link": "https://x.example/1", "source": "S"},
+         {"title": "H2", "link": "https://x.example/2", "source": "S"}], 3)
+    out = digest.build_html([("World", degraded, None)], DATE)
+    assert "2 headlines · 1 outlet" in out
+
+
+def test_reading_time_grows_with_the_email():
+    long_detail = " ".join(["word"] * 2300)
+    heavy = {"overview": "O.", "stories": [{"subheading": "S", "detail": long_detail, "sources": []}]}
+    out = digest.build_html([("Tech", heavy, None)], DATE)
+    assert "about 10 min read" in out
 
 
 # --------------------------------------------------------------------------

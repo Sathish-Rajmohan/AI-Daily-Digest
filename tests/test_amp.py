@@ -253,6 +253,36 @@ def test_skipped_topics_and_empty_digest():
     assert "In today's digest" not in out
 
 
+def test_topics_carry_their_ink_class_by_position():
+    out = digest.build_amp([("A", brief("A"), None), ("B", None, "failed"), ("C", brief("C"), None)], DATE)
+    assert '<div class="topic ink0">' in out and '<div class="topic ink2">' in out
+    assert '<div class="topic ink1">' not in out
+    css = re.search(r"<style amp-custom>(.*?)</style>", out).group(1)
+    for i, ink in enumerate(digest._TOPIC_INKS):
+        assert f".ink{i} .topic-name" in css and f".bg{i} {{ background:{ink}; }}" in css
+
+
+def test_masthead_strip_widths_follow_each_topics_share():
+    out = digest.build_amp([("Big", brief("Big", 3), None), ("Small", brief("Small", 1), None)], DATE)
+    css = re.search(r"<style amp-custom>(.*?)</style>", out).group(1)
+    assert ".s0 { width:75.0%; }" in css and ".s1 { width:25.0%; }" in css
+    assert out.count('<div class="seg ') == 2
+    assert '<span class="entry ink0">' in out and '<span class="entry ink1">' in out
+
+
+def test_masthead_line_matches_the_html_version():
+    results = [("Tech", brief("Tech", 3), None), ("World", brief("World", 1), None)]
+    line = digest._summary_line(digest._digest_summary(results, None, True), True)
+    assert line
+    assert html.escape(line) in digest.build_amp(results, DATE)
+    assert html.escape(line) in digest.build_html(results, DATE, collapsible=True)
+
+
+def test_no_strip_or_index_when_nothing_to_show():
+    out = digest.build_amp([("Quiet", None, None)], DATE)
+    assert 'class="strip"' not in out and 'class="index"' not in out
+
+
 def test_no_fact_no_fact_block():
     out = digest.build_amp([("Tech", brief(), None)], DATE)
     assert "One thing worth knowing" not in out

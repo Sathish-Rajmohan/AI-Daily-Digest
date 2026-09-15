@@ -300,7 +300,7 @@ def expected_axes(day):
 
 
 def test_fact_request_and_result(transport):
-    transport.script("gem-a", gemini_reply({"fact": "  A fact.  ", "why": "  Because.  "}))
+    transport.script("gem-a", gemini_reply({"fact": "  A fact.  ", "explanation": "  Because.  "}))
     field, angle = expected_axes(DAY)
     fact = digest.fetch_fact_of_the_day(DAY)
     assert fact == {"field": field, "fact": "A fact.", "why": "Because."}
@@ -319,7 +319,7 @@ def test_fact_without_why_keeps_the_fact(transport):
     assert digest.fetch_fact_of_the_day(DAY)["why"] == ""
 
 
-@pytest.mark.parametrize("reply", [{"fact": "", "why": "x"}, {"why": "x"}, "[]", '"text"'])
+@pytest.mark.parametrize("reply", [{"fact": "", "explanation": "x"}, {"explanation": "x"}, "[]", '"text"'])
 def test_fact_with_nothing_usable_is_none(transport, reply):
     transport.script("gem-a", gemini_reply(reply))
     assert digest.fetch_fact_of_the_day(DAY) is None
@@ -416,4 +416,96 @@ def test_schemas_order_citations_before_prose_and_stories_before_overview():
     assert item["propertyOrdering"].index("article_ids") < item["propertyOrdering"].index("detail")
     top = digest.BRIEF_SCHEMA["propertyOrdering"]
     assert top.index("stories") < top.index("overview")
-    assert digest.FACT_SCHEMA["propertyOrdering"] == ["fact", "why"]
+    assert digest.FACT_SCHEMA["propertyOrdering"] == ["fact", "explanation"]
+
+
+# --------------------------------------------------------------------------
+# The fact prompt: simple enough to follow on the first read
+# --------------------------------------------------------------------------
+
+def _syllables(word):
+    word = re.sub(r"[^a-z]", "", word.lower())
+    if not word:
+        return 0
+    count = len(re.findall(r"[aeiouy]+", word))
+    if word.endswith("e") and count > 1 and not word.endswith(("le", "ee")):
+        count -= 1
+    return max(1, count)
+
+
+def _reading_grade(text):
+    """Flesch-Kincaid grade level, with a vowel-group syllable estimate."""
+    sentences = [s for s in re.split(r"(?<=[.!?])\s+", text.strip()) if s]
+    words = re.findall(r"[A-Za-z']+", text)
+    syllables = sum(_syllables(w) for w in words)
+    return 0.39 * len(words) / len(sentences) + 11.8 * syllables / len(words) - 15.59
+
+
+def fact_example(label):
+    match = re.search(
+        label + r' \([^)]*?(\d+) words\):\nfact: "(.+?)"\nexplanation: "(.+?)"\n',
+        digest.FACT_SYSTEM, re.S)
+    assert match, f"{label} example not found in FACT_SYSTEM"
+    return int(match.group(1)), match.group(2), match.group(3)
+
+
+@pytest.mark.parametrize("label", ["WRONG", "RIGHT"])
+def test_fact_example_word_counts_are_true(label):
+    claimed, fact, explanation = fact_example(label)
+    assert len(f"{fact} {explanation}".split()) == claimed
+
+
+def test_right_example_obeys_the_limits_it_teaches():
+    _, fact, explanation = fact_example("RIGHT")
+    assert len(fact.split()) <= digest.FACT_MAX_WORDS
+    assert len(explanation.split()) <= digest.EXPLANATION_MAX_WORDS
+    sentences = re.split(r"(?<=[.!?])\s+", explanation)
+    assert 2 <= len(sentences) <= 3
+    assert max(len(s.split()) for s in sentences) <= 12
+
+
+def test_right_example_reads_at_a_general_audience_level_and_wrong_does_not():
+    _, wrong_fact, wrong_expl = fact_example("WRONG")
+    _, right_fact, right_expl = fact_example("RIGHT")
+    right = _reading_grade(f"{right_fact} {right_expl}")
+    wrong = _reading_grade(f"{wrong_fact} {wrong_expl}")
+    assert right <= 8, right
+    assert wrong >= 11, wrong
+
+
+def test_right_example_drops_the_jargon():
+    _, wrong_fact, _ = fact_example("WRONG")
+    _, right_fact, right_expl = fact_example("RIGHT")
+    assert "zero lower bound" in wrong_fact
+    for term in ("zero lower bound", "negative rates", "depositors", "currency"):
+        assert term not in f"{right_fact} {right_expl}"
+
+
+def test_word_limits_in_the_prompt_match_what_the_code_checks():
+    assert f"{digest.FACT_MAX_WORDS} words or fewer" in digest.FACT_SYSTEM
+    assert f"{digest.EXPLANATION_MAX_WORDS} words or fewer" in digest.FACT_SYSTEM
+
+
+def test_fact_rule_references_resolve():
+    numbers = {int(n) for n in re.findall(r"^(\d+)\. ", digest.FACT_SYSTEM, re.M)}
+    assert numbers == set(range(1, max(numbers) + 1))
+    schema = json.dumps(digest.FACT_SCHEMA)
+    referenced = {int(n) for n in re.findall(r"rule (\d+)", schema)}
+    for lo, hi in re.findall(r"rules (\d+)-(\d+)", schema):
+        referenced.update(range(int(lo), int(hi) + 1))
+    assert referenced and referenced <= numbers
+
+
+def test_fact_word_counts_are_logged_and_overlong_ones_flagged(transport, capsys):
+    transport.script("gem-a", gemini_reply({"fact": " ".join(["word"] * 30) + ".",
+                                            "explanation": "Short."}))
+    digest.fetch_fact_of_the_day(DAY)
+    captured = capsys.readouterr()
+    assert "fact is 30 words, explanation 1" in captured.out
+    assert "longer than the prompt allows" in captured.err
+
+
+def test_fact_within_limits_is_not_flagged(transport, capsys):
+    transport.script("gem-a", gemini_reply({"fact": "Short fact.", "explanation": "Short reason."}))
+    digest.fetch_fact_of_the_day(DAY)
+    assert "longer than the prompt allows" not in capsys.readouterr().err

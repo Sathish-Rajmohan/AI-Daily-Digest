@@ -808,74 +808,124 @@ FACT_FIELDS = [
     "astronomy", "chemistry", "anthropology", "computer science",
 ]
 
-# Second rotating axis, and the one doing most of the work now that sampling
-# is left at its default. A field on its own is a broad ask, and asked the
-# same broad way every fortnight a model returns its most famous answer for
-# that field again and again. Pairing the field with an angle of approach
-# makes the request specific enough that the obvious answer often doesn't fit
-# it. 11 is coprime with the 14 fields, so a given pair doesn't come back for
-# 154 days rather than repeating every fortnight.
+# Second rotating axis. A field on its own is a broad ask, and asked the same
+# broad way every fortnight a model returns its most famous answer for that
+# field. Pairing the field with an angle makes the request specific enough
+# that the obvious answer often doesn't fit. 11 is coprime with the 14
+# fields, so a given pair doesn't come back for 154 days.
+#
+# The angles are deliberately everyday. An earlier set asked for things like
+# "a hard limit, and what sets it" and got exactly what that invites: an
+# abstract, jargon-heavy mechanism nobody could picture. Each angle here
+# points at something a reader can see, hold, or has wondered about.
 FACT_ANGLES = [
-    "a measured quantity that is nothing like what people assume",
-    "how something actually works, one level below the usual explanation",
-    "a historical accident that still shapes something today",
-    "a hard limit, and what sets it",
-    "two things that look unrelated and turn out to share a cause",
-    "a name or term whose origin explains something about the thing itself",
-    "a case where the obvious explanation is wrong and the real one is known",
-    "a trade-off that cannot be engineered away",
-    "something that changed recently and quietly, against the textbook version",
-    "a comparison of scale that resets the reader's intuition",
-    "standard practice whose original reason has since disappeared",
+    "something ordinary that works differently than most people guess",
+    "a number that sounds wrong but is true",
+    "an everyday word or name with a surprising origin",
+    "an accident or mistake that led to something people use today",
+    "a common belief that is wrong, and what is actually true",
+    "a record: the biggest, smallest, oldest, fastest or strangest of its kind",
+    "how people did something ordinary before modern technology",
+    "a surprising link between two things that seem unrelated",
+    "something that happens every day that almost nobody notices",
+    "a comparison of size or time that makes something easy to picture",
+    "a simple reason behind something people see all the time",
 ]
 
-FACT_SYSTEM = """You write one fact a day for a curious, well-read adult who \
-wants to finish it thinking about something they hadn't considered.
+# Stated in FACT_SYSTEM and checked against what comes back.
+FACT_MAX_WORDS = 25
+EXPLANATION_MAX_WORDS = 40
 
-Each request names a field and an angle to approach it from.
+# Built from what makes a fact land and stay with someone. Surprise gets
+# attention, but curiosity needs something to hold on to: a twist on what the
+# reader half knows opens a gap they want closed, where a fact about
+# something unfamiliar opens nothing. Concrete beats abstract. A number is
+# only understood next to a familiar comparison, and round numbers are easier
+# to hold than exact ones. The explanation has to survive being told to a
+# curious 12-year-old, which is also roughly the reading level plain-language
+# guidance sets for a general audience. The worked example is a real fact
+# this digest sent that failed on all of those, next to a rewrite that
+# doesn't. Style is the thing examples teach better than rules.
+FACT_SYSTEM = f"""You write one fun fact a day for a curious adult reading \
+their morning email. It should take about ten seconds to read, make sense on \
+the first pass, and leave them knowing something new they could tell a friend.
 
-1. Pick something specific and concrete from that field, and fit the angle \
-if a good fact fits it. The angle is there to steer you away from the \
-field's most famous fact, so treat it as a real constraint. If nothing solid \
-in the field genuinely fits the angle, pick the strongest fact from the \
-field and ignore the angle rather than forcing a bad match.
-2. Prefer the solidly established over the surprising but shaky. If a claim \
-is contested, or is one of those things "everyone knows" that turns out to \
-be folklore, leave it alone.
-3. The reader has already seen the usual circuit: honey never spoils, \
-bananas are radioactive, octopuses have three hearts, Napoleon was average \
-height, the Great Wall is not visible from space. Skip anything in that \
-family. Aim past what an interested amateur would already have run into, \
-and past the one fact the field is most often illustrated with.
-4. Write "fact" as 1-2 plain sentences. No "did you know", no exclamation \
-marks, no build-up. Give the specific number, name, date or mechanism \
-rather than gesturing at it.
-5. Write "why" as 2-3 sentences on what the fact explains, what it connects \
-to, or what it should make the reader reconsider. This is the part that \
-earns the fact its place, so do not just restate the fact in other words.
-6. Same language rules as any good explainer: sentences averaging 15-20 \
-words and never past 25, active voice, everyday vocabulary, one idea per \
-sentence, and any technical term explained in plain words the first time it \
-appears."""
+Each request names a field and an angle. Pick a fact from that field that \
+fits the angle. If nothing solid fits the angle, ignore the angle and pick \
+the field's best simple fact instead.
+
+CHOOSING THE FACT
+
+1. Pick something the reader can picture: an object, an animal, a place, a \
+person, a number, an everyday moment. Skip abstract mechanisms, theories and \
+policy.
+2. Make it surprising, and land the surprise on something familiar. A twist \
+on something the reader already knows sparks curiosity. A fact about \
+something they have never heard of does not.
+3. One idea only. If the fact needs a second idea explained first, pick a \
+different fact.
+4. Only well-established facts. No myths, disputed claims, or things \
+"everyone knows" that are really folklore. Skip the overused ones too: \
+honey never spoils, octopuses have three hearts, bananas are radioactive, \
+Napoleon was short, the Great Wall is visible from space.
+
+WRITING IT
+
+5. "fact" is one sentence of {FACT_MAX_WORDS} words or fewer that states the \
+surprising thing plainly. No lead-in like "Did you know", and no \
+exclamation marks.
+6. "explanation" answers "how come?" in two or three short sentences, \
+{EXPLANATION_MAX_WORDS} words or fewer in total, with one idea per sentence.
+7. Write so a curious 12-year-old could follow every word. Use everyday \
+words. Leave out technical terms and the names of concepts, and describe the \
+thing itself instead. The only exception is a word most adults already know, \
+like "DNA" or "gravity".
+8. When a number matters, round it and compare it to something familiar, \
+like "about as heavy as a car" or "longer than a football field". Leave out \
+numbers that don't add to the surprise.
+9. Stop once "how come?" is answered. Do not end with a lesson or a big \
+claim like "this shows that".
+
+THE DIFFERENCE
+
+WRONG (a real fact this digest sent, shortened: jargon, three ideas, 79 words):
+fact: "For decades, economists believed central banks could never cut interest \
+rates below zero because depositors would withdraw their money as paper cash. \
+This barrier, the zero lower bound, is actually determined by the physical \
+cost of storing, insuring, and transporting large amounts of currency."
+explanation: "When European and Japanese central banks introduced negative \
+rates, commercial banks chose not to hoard cash. They realized that renting \
+secure vaults and hiring guards cost more than paying the central bank's \
+negative interest fee."
+
+RIGHT (the same idea: one picture, plain words, 48 words):
+fact: "Some European banks had to pay a fee to keep their money at the \
+central bank, and most paid rather than take it out."
+explanation: "The other choice was taking it out as cash. But mountains of \
+banknotes need vaults, guards and insurance. That cost more than the fee."
+
+Use the example for its style only, and do not reuse its topic."""
 
 FACT_SCHEMA = {
     "type": "OBJECT",
-    "description": "One fact worth knowing, and why it is worth knowing.",
+    "description": "One fun fact, and how come it's true.",
     "properties": {
         "fact": {
             "type": "STRING",
-            "description": "The fact itself, in 1-2 plain sentences, per rule 4.",
+            "description": (
+                f"One plain sentence of {FACT_MAX_WORDS} words or fewer, per rule 5."
+            ),
         },
-        "why": {
+        "explanation": {
             "type": "STRING",
             "description": (
-                "2-3 sentences on what it explains, connects to, or overturns, "
-                "per rule 5. Not a restatement of the fact."
+                f"How come, in two or three short sentences of "
+                f"{EXPLANATION_MAX_WORDS} words or fewer, per rules 6-9."
             ),
         },
     },
-    "propertyOrdering": ["fact", "why"],
-    "required": ["fact", "why"],
+    "propertyOrdering": ["fact", "explanation"],
+    "required": ["fact", "explanation"],
 }
 
 
@@ -907,9 +957,20 @@ def fetch_fact_of_the_day(today):
         return None
 
     text = str(fact.get("fact") or "").strip()
-    why = str(fact.get("why") or "").strip()
+    why = str(fact.get("explanation") or "").strip()
     if not text:
         return None
+
+    # The limits in FACT_SYSTEM, checked against what actually came back, so
+    # a drift back toward dense facts shows up in the log before the inbox.
+    fact_words, why_words = len(text.split()), len(why.split())
+    print(f"  fact is {fact_words} words, explanation {why_words}")
+    if fact_words > FACT_MAX_WORDS or why_words > EXPLANATION_MAX_WORDS:
+        print(
+            f"  [warn] the fact came back longer than the prompt allows "
+            f"({FACT_MAX_WORDS} and {EXPLANATION_MAX_WORDS} words)",
+            file=sys.stderr,
+        )
     return {"field": field, "fact": text, "why": why}
 
 
@@ -1187,25 +1248,47 @@ def headlines_only_brief(articles, max_developments):
     }
 
 
-# Muted grays and a single accent blue, deliberately not pure black or
-# white. Gmail's mobile apps auto-invert colors in dark mode regardless of
-# any CSS here, and extreme values invert harshest. Everything below stays
-# a solid AA contrast ratio against a white card.
-_FONT_STACK = (
-    '-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif'
-)
-_PAGE_BG = "#eef1f5"
-_CARD_BG = "#ffffff"
-_TEXT_HEADING = "#161a23"
-_TEXT_BODY = "#39414f"
-_TEXT_MUTED = "#67707d"
-_ACCENT = "#2454c7"
-_BORDER = "#e6e9ee"
+# Palette. A cool, faintly green-grey ground and near-black inks rather than
+# pure black and white, since Gmail's apps invert colours in dark mode and
+# extreme values invert harshest. Every text colour here clears WCAG AA
+# against the card, which a test checks.
+#
+# Each topic gets its own deep ink, used on its name, its links and its
+# "Read more" cue, and the masthead strip shows the day's stories in the same
+# inks. On a long scroll that's how a reader knows which section they're in
+# without scrolling back up. The inks are dark and desaturated so five of
+# them sit together without the email getting loud, and so a dark-mode
+# inversion only lightens them rather than breaking them.
+#
+# Font names are single-quoted. These stacks go inside double-quoted style
+# attributes, where a double quote ends the attribute early and the whole
+# font-family declaration is thrown away.
+_FONT_STACK = "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif"
+# Georgia is the one serif every mail app has, including Outlook and the
+# Gmail apps, neither of which load web fonts. Android has no Georgia and
+# falls back to its own serif, which keeps the contrast with the sans body.
+_SERIF_STACK = "Georgia,'Times New Roman',Times,serif"
+_PAGE_BG = "#eef2f1"
+_CARD_BG = "#fcfdfc"
+_TEXT_HEADING = "#141a19"
+_TEXT_BODY = "#2f3836"
+_TEXT_MUTED = "#5f6a67"
+_ACCENT = "#0e6a66"
+_BORDER = "#e1e7e5"
 _WARN_BG = "#fff8e6"
 _WARN_BORDER = "#f0dca0"
 _WARN_TEXT = "#8a6100"
-_FACT_BG = "#f5f7fc"
-_FACT_BORDER = "#dde4f2"
+_TOPIC_INKS = ["#0e6a66", "#9a2c3c", "#34489a", "#52661d", "#8b5a06", "#7a3e7c"]
+
+# Reading speed for the masthead's time estimate, a common figure for adults
+# reading on screen.
+_READING_WPM = 230
+
+
+def _topic_ink(index):
+    """A topic's ink, by its position in topics.json, so a topic keeps its
+    colour from day to day even when another topic has nothing to show."""
+    return _TOPIC_INKS[index % len(_TOPIC_INKS)]
 
 
 def _paragraphs_to_html(text, size=15, color=None, margin="0 0 12px 0"):
@@ -1219,35 +1302,41 @@ def _paragraphs_to_html(text, size=15, color=None, margin="0 0 12px 0"):
     )
 
 
-def _sources_html(sources, label="Sources"):
-    """The compact link list that sits under a story."""
+def _sources_html(sources, label="Sources", ink=_ACCENT):
+    """The compact link list that sits under a story, in its topic's ink."""
     items = ""
     for s in sources or []:
         title = html.escape(s.get("title") or "(untitled)")
         link = _web_link(s.get("link"))
         outlet = html.escape(s.get("outlet") or "")
-        outlet_bit = f' <span style="color:{_TEXT_MUTED};">({outlet})</span>' if outlet else ""
+        outlet_bit = f" ({outlet})" if outlet else ""
         # Checked again here as well as at fetch time, since this is where a
         # link actually becomes an href. Without a usable link the title is
         # still listed, just not clickable.
+        #
+        # The arrow sits inside the link, and the outlet is bare text taking
+        # the list item's muted colour. A full digest carries over a hundred
+        # of these, and a separate span apiece costs several KB of Gmail's
+        # 102KB budget.
         if link:
             title_html = (
-                f'<a href="{html.escape(link, quote=True)}" style="color:{_ACCENT};'
-                f'text-decoration:none;font-weight:500;">{title}</a>'
+                f'<a href="{html.escape(link, quote=True)}" style="color:{ink};'
+                f'text-decoration:none;font-weight:600;">&#8250;&nbsp;{title}</a>'
             )
         else:
-            title_html = f'<span style="color:{_TEXT_BODY};font-weight:500;">{title}</span>'
-        items += (
-            f'<li style="margin:0 0 6px 0;">'
-            f'<span style="color:{_ACCENT};">&#8250;</span> '
-            f'{title_html}{outlet_bit}</li>'
-        )
+            title_html = (
+                f'<span style="color:{_TEXT_BODY};font-weight:600;">&#8250;&nbsp;{title}</span>'
+            )
+        items += f'<li style="margin:0 0 7px;color:{_TEXT_MUTED};">{title_html}{outlet_bit}</li>'
     if not items:
         return ""
+    heading = (
+        f'<div style="font-size:10px;font-weight:700;letter-spacing:0.12em;'
+        f'text-transform:uppercase;color:{_TEXT_MUTED};margin-bottom:7px;">{label}</div>'
+        if label else ""
+    )
     return (
-        f'<div style="margin-top:12px;">'
-        f'<div style="font-size:10px;font-weight:700;letter-spacing:0.06em;'
-        f'text-transform:uppercase;color:{_TEXT_MUTED};margin-bottom:6px;">{label}</div>'
+        f'<div style="margin-top:14px;">{heading}'
         f'<ul style="margin:0;padding:0;list-style:none;font-size:13px;'
         f'line-height:1.5;">{items}</ul></div>'
     )
@@ -1276,28 +1365,158 @@ def _build_preheader(topic_results):
     return text
 
 
+def _plural(count, singular, plural):
+    return f"{count} {singular if count == 1 else plural}"
+
+
+def _story_count(brief):
+    """How many items a topic carries: written stories, or on the headline
+    fallback, headlines."""
+    stories = brief.get("stories") or []
+    if brief.get("degraded"):
+        return sum(len(s.get("sources") or []) for s in stories)
+    return len(stories)
+
+
+def _topic_outlets(brief):
+    return {
+        s["outlet"]
+        for story in brief.get("stories") or []
+        for s in story.get("sources") or []
+        if s.get("outlet")
+    }
+
+
+def _topic_meta(brief):
+    """The small line under a topic's name: how much is in it."""
+    count = _story_count(brief)
+    if brief.get("degraded"):
+        meta = _plural(count, "headline", "headlines")
+    else:
+        meta = _plural(count, "story", "stories")
+    outlets = _topic_outlets(brief)
+    if outlets:
+        meta += " · " + _plural(len(outlets), "outlet", "outlets")
+    return meta
+
+
+def _words(text):
+    return len((text or "").split())
+
+
+def _digest_summary(topic_results, fact, collapsible):
+    """
+    What the masthead reports about the day: stories per topic, the outlets
+    cited, and roughly how long the email takes to read. Every figure is
+    counted from what's actually in this email. With stories folded, the
+    estimate covers what's on screen before anything is opened.
+    """
+    topics = []
+    outlets = set()
+    skim = _words((fact or {}).get("fact")) + _words((fact or {}).get("why"))
+    full = skim
+    for index, (name, brief, _note) in enumerate(topic_results):
+        if not brief:
+            continue
+        topics.append({"index": index, "name": name, "count": _story_count(brief)})
+        outlets |= _topic_outlets(brief)
+        skim += _words(brief.get("overview"))
+        full += _words(brief.get("overview"))
+        for story in brief.get("stories") or []:
+            skim += _words(story.get("subheading"))
+            full += _words(story.get("subheading")) + _words(story.get("detail"))
+            if brief.get("degraded"):
+                titles = sum(_words(s.get("title")) for s in story.get("sources") or [])
+                skim += titles
+                full += titles
+    words = skim if collapsible else full
+    return {
+        "topics": topics,
+        "stories": sum(t["count"] for t in topics),
+        "outlets": len(outlets),
+        "minutes": max(1, round(words / _READING_WPM)),
+    }
+
+
+def _summary_line(summary, collapsible):
+    if not summary["stories"]:
+        return ""
+    line = _plural(summary["stories"], "story", "stories")
+    if summary["outlets"]:
+        line += " from " + _plural(summary["outlets"], "outlet", "outlets")
+    line += f" · about {summary['minutes']} min {'to skim' if collapsible else 'read'}"
+    return line
+
+
+def _footer_text(summary):
+    text = "Change topics and sources in topics.json."
+    if summary["outlets"]:
+        text = f"Drawn from {_plural(summary['outlets'], 'outlet', 'outlets')}. {text}"
+    return text
+
+
+def _topic_strip_html(summary):
+    """
+    A thin bar split into each topic's ink, each segment sized by that
+    topic's share of the day's stories, so a glance shows which topics were
+    busy. Table cells with bgcolor, because that's what Outlook paints.
+    """
+    topics = [t for t in summary["topics"] if t["count"]]
+    total = sum(t["count"] for t in topics)
+    if not total:
+        return ""
+    cells = ""
+    for position, t in enumerate(topics):
+        width = f"{t['count'] / total * 100:.1f}%"
+        ink = _topic_ink(t["index"])
+        gap = f"border-left:2px solid {_CARD_BG};" if position else ""
+        cells += (
+            f'<td width="{width}" height="6" bgcolor="{ink}" style="width:{width};height:6px;'
+            f'background:{ink};{gap}font-size:0;line-height:0;">&nbsp;</td>'
+        )
+    return (
+        f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" '
+        f'style="width:100%;margin-top:18px;border-collapse:collapse;"><tr>{cells}</tr></table>'
+    )
+
+
+def _topic_index_html(summary):
+    """The key to the strip: each topic's name beside its ink and count."""
+    entries = [
+        f'<span style="white-space:nowrap;margin-right:14px;">'
+        f'<span style="color:{_topic_ink(t["index"])};">&#9632;</span>&nbsp;'
+        f'<span style="color:{_TEXT_BODY};">{html.escape(t["name"])}</span>&nbsp;'
+        f'<span style="color:{_TEXT_MUTED};">{t["count"]}</span></span>'
+        for t in summary["topics"]
+    ]
+    if not entries:
+        return ""
+    return f'<div style="margin-top:10px;font-size:13px;line-height:1.9;">{" ".join(entries)}</div>'
+
+
 def _fact_block(fact):
     """
-    The one-a-day fact, boxed at the top of the email.
+    The one-a-day fact, the first thing to read after the masthead.
 
-    Sits above the news on purpose. It's the part worth reading slowly, and
-    it gets skipped if it's buried under five topics.
+    Set apart by type rather than a box: the fact in the serif at a size
+    nothing else in the email uses, and the explanation in plain body text
+    beneath it. It's the part worth reading slowly, and it gets skipped if
+    it's buried under five topics.
     """
     if not fact:
         return ""
     why = (
-        f'<p style="font-size:14px;color:{_TEXT_BODY};line-height:1.6;'
-        f'margin:8px 0 0 0;">{html.escape(fact["why"])}</p>'
+        f'<p style="font-size:15px;color:{_TEXT_BODY};line-height:1.65;'
+        f'margin:10px 0 0 0;">{html.escape(fact["why"])}</p>'
         if fact.get("why") else ""
     )
     return (
-        f'<div style="margin-top:20px;padding:16px 18px;background:{_FACT_BG};'
-        f'border:1px solid {_FACT_BORDER};border-radius:8px;">'
-        f'<div style="font-size:10px;font-weight:700;letter-spacing:0.07em;'
-        f'text-transform:uppercase;color:{_ACCENT};margin-bottom:8px;">'
+        f'<div style="margin-top:34px;">'
+        f'<div style="font-size:11px;font-weight:700;letter-spacing:0.12em;'
+        f'text-transform:uppercase;color:{_TEXT_MUTED};">'
         f'One thing worth knowing &middot; {html.escape(fact["field"])}</div>'
-        f'<p style="font-size:15px;font-weight:600;color:{_TEXT_HEADING};'
-        f'line-height:1.55;margin:0;">{html.escape(fact["fact"])}</p>'
+        f'<p style="font-family:{_SERIF_STACK};font-size:22px;line-height:1.4;'
+        f'color:{_TEXT_HEADING};margin:10px 0 0 0;">{html.escape(fact["fact"])}</p>'
         f'{why}</div>'
     )
 
@@ -1321,16 +1540,20 @@ def _fact_block(fact):
 #
 # :checked sits on a bare input type selector because Outlook.com and
 # Outlook's apps only support it that way, and there are no CSS comments
-# because Yahoo ignores the rule after one.
+# because Yahoo ignores the rule after one. The "Read more" cue's type is set
+# in the rule rather than inline: the cue only ever shows where this
+# stylesheet applies, so styling it inline would spend bytes on every story
+# for nothing.
 _COLLAPSE_CSS = (
     "<style>"
     ".dd-story input:checked ~ .dd-body { display:none !important; }"
-    ".dd-story input:checked ~ .dd-head .dd-more { display:inline !important; }"
+    ".dd-story input:checked ~ .dd-head .dd-more { display:inline !important;"
+    " font-size:13px; font-weight:600; white-space:nowrap; }"
     "</style>"
 )
 
 
-def _collapsible_story_html(story, sources_label):
+def _collapsible_story_html(story, sources_label, ink=_ACCENT):
     """
     One story in the regular HTML email, folded to its subheading where the
     app supports it and fully open everywhere else. A story with nothing
@@ -1339,11 +1562,11 @@ def _collapsible_story_html(story, sources_label):
     """
     label = html.escape(_story_label(story))
     body = _paragraphs_to_html((story.get("detail") or "").strip()) + _sources_html(
-        story.get("sources") or [], sources_label
+        story.get("sources") or [], sources_label, ink
     )
     head_style = (
-        f"display:block;padding:13px 0;font-size:16px;font-weight:700;"
-        f"color:{_TEXT_HEADING};line-height:1.35;"
+        f"display:block;padding:15px 0;font-size:16px;font-weight:600;"
+        f"color:{_TEXT_HEADING};line-height:1.4;"
     )
     if not body:
         return (
@@ -1355,47 +1578,48 @@ def _collapsible_story_html(story, sources_label):
         f'<label style="display:block;cursor:pointer;">'
         f'<input type="checkbox" checked style="display:none;mso-hide:all;">'
         f'<span class="dd-head" style="{head_style}">{label}'
-        f'<span class="dd-more" style="display:none;font-size:13px;font-weight:500;'
-        f'color:{_ACCENT};white-space:nowrap;"> &nbsp;+&nbsp;Read&nbsp;more</span></span>'
-        f'<span class="dd-body" style="display:block;padding:0 0 14px 0;cursor:auto;">{body}</span>'
+        f'<span class="dd-more" style="display:none;color:{ink};"> &nbsp;+&nbsp;Read&nbsp;more</span></span>'
+        f'<span class="dd-body" style="display:block;padding:0 0 16px;">{body}</span>'
         f"</label></div>"
     )
 
 
 def build_html(topic_results, date_str, fact=None, collapsible=False):
+    summary = _digest_summary(topic_results, fact, collapsible)
     sections = []
     failed_topics = []
-    topic_names = []
-    for topic_name, brief, note in topic_results:
+    for index, (topic_name, brief, note) in enumerate(topic_results):
         if note:
             failed_topics.append(topic_name)
         if not brief:
             continue
-        topic_names.append(topic_name)
 
+        ink = _topic_ink(index)
         degraded = bool(brief.get("degraded"))
 
-        # The topic's own summary sits directly under the topic name, before
-        # any story. A reader who stops here should still have the gist, so
-        # it gets a little more weight than the body copy below it.
+        # The topic's own summary sits directly under its name, before any
+        # story. A reader who stops here should still have the gist, so it
+        # gets a little more weight than the body copy below it.
         if degraded:
             overview_html = (
                 f'<p style="font-size:14px;color:{_TEXT_MUTED};line-height:1.6;'
-                f'margin:0 0 4px 0;">No summary was available for this topic '
+                f'margin:14px 0 0 0;">No summary was available for this topic '
                 f'this run, so the latest stories are listed directly.</p>'
             )
         else:
             overview_html = _paragraphs_to_html(
-                brief.get("overview") or "", size=16, color=_TEXT_HEADING, margin="0 0 6px 0"
+                brief.get("overview") or "", size=17, color=_TEXT_HEADING, margin="14px 0 0 0"
             )
 
         stories_html = ""
         if collapsible and not degraded:
             folded = brief.get("stories") or []
             if folded:
-                stories_html = '<div style="margin-top:14px;">' + "".join(
-                    _collapsible_story_html(story, "Sources") for story in folded
-                ) + "</div>"
+                stories_html = (
+                    '<div style="margin-top:18px;">'
+                    + "".join(_collapsible_story_html(story, None, ink) for story in folded)
+                    + "</div>"
+                )
             plain_stories = []
         else:
             plain_stories = brief.get("stories") or []
@@ -1407,31 +1631,32 @@ def build_html(topic_results, date_str, fact=None, collapsible=False):
             sub_html = ""
             if subheading:
                 sub_html = (
-                    f'<div style="font-size:16px;font-weight:700;'
-                    f'color:{_TEXT_HEADING};line-height:1.35;'
+                    f'<div style="font-size:17px;font-weight:700;'
+                    f'color:{_TEXT_HEADING};line-height:1.4;'
                     f'margin:0 0 8px 0;">{html.escape(subheading)}</div>'
                 )
 
             stories_html += (
-                f'<div style="margin-top:22px;">'
+                f'<div style="margin-top:24px;">'
                 f'{sub_html}'
                 f'{_paragraphs_to_html(detail)}'
-                f'{_sources_html(sources, "Stories" if degraded else "Sources")}'
+                f'{_sources_html(sources, "Stories" if degraded else None, ink)}'
                 f'</div>'
             )
 
         sections.append(
-            f'<div style="padding:26px 0;border-top:1px solid {_BORDER};">'
-            f'<div style="font-size:11px;font-weight:700;letter-spacing:0.07em;'
-            f'text-transform:uppercase;color:{_ACCENT};'
-            f'margin-bottom:10px;">{html.escape(topic_name)}</div>'
+            f'<div style="margin-top:36px;padding-top:30px;border-top:1px solid {_BORDER};">'
+            f'<div style="font-family:{_SERIF_STACK};font-size:25px;line-height:1.2;'
+            f'font-weight:700;color:{ink};">{html.escape(topic_name)}</div>'
+            f'<div style="margin-top:5px;font-size:12px;color:{_TEXT_MUTED};">'
+            f'{html.escape(_topic_meta(brief))}</div>'
             f'{overview_html}'
             f'{stories_html}'
             f'</div>'
         )
 
     body = "".join(sections) if sections else (
-        f'<div style="padding:26px 0;border-top:1px solid {_BORDER};'
+        f'<div style="margin-top:36px;padding-top:30px;border-top:1px solid {_BORDER};'
         f'font-size:15px;color:{_TEXT_BODY};">No new stories found in the '
         f'lookback window.</div>'
     )
@@ -1440,19 +1665,19 @@ def build_html(topic_results, date_str, fact=None, collapsible=False):
     if failed_topics:
         names = ", ".join(html.escape(n) for n in failed_topics)
         failure_notice = f"""
-        <div style="margin:20px 0 0 0;padding:12px 14px;background:{_WARN_BG};
-          border:1px solid {_WARN_BORDER};border-radius:6px;font-size:13px;
+        <div style="margin:28px 0 0 0;padding:12px 14px;background:{_WARN_BG};
+          border:1px solid {_WARN_BORDER};border-radius:4px;font-size:13px;
           color:{_WARN_TEXT};">
           Skipped this run: {names}. Check the Actions log for details.
         </div>
         """
 
-    contents_line = ""
-    if topic_names:
-        contents_line = (
-            f'<div style="margin-top:16px;font-size:13px;color:{_TEXT_MUTED};">'
-            f'In today\'s digest: {html.escape(", ".join(topic_names))}</div>'
-        )
+    summary_line = _summary_line(summary, collapsible)
+    summary_html = (
+        f'<div style="margin-top:8px;font-size:13px;color:{_TEXT_MUTED};">'
+        f'{html.escape(summary_line)}</div>'
+        if summary_line else ""
+    )
 
     preheader = html.escape(_build_preheader(topic_results))
     # Padding so Gmail/Outlook stop pulling trailing body text into the
@@ -1466,7 +1691,7 @@ def build_html(topic_results, date_str, fact=None, collapsible=False):
       <meta name="viewport" content="width=device-width, initial-scale=1">
       <meta name="color-scheme" content="light">
       <meta name="supported-color-schemes" content="light">
-      <title>Your Daily Digest</title>
+      <title>Daily Digest</title>
       {_COLLAPSE_CSS if collapsible else ""}
     </head>
     <body style="margin:0;padding:0;background:{_PAGE_BG};">
@@ -1476,22 +1701,26 @@ def build_html(topic_results, date_str, fact=None, collapsible=False):
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"
         style="background:{_PAGE_BG};">
         <tr>
-          <td align="center" style="padding:28px 12px;">
+          <td align="center" style="padding:24px 10px;">
             <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"
               style="width:100%;max-width:640px;">
               <tr>
-                <td style="background:{_CARD_BG};border-radius:10px;padding:32px 28px;
-                  font-family:{_FONT_STACK};">
-                  <div style="font-size:23px;font-weight:700;color:{_TEXT_HEADING};
-                    letter-spacing:-0.01em;">Your Daily Digest</div>
-                  <div style="font-size:13px;color:{_TEXT_MUTED};margin-top:4px;">{html.escape(date_str)}</div>
-                  {contents_line}
+                <td style="background:{_CARD_BG};border-radius:6px;padding:34px 30px 30px 30px;
+                  text-align:left;font-family:{_FONT_STACK};color:{_TEXT_BODY};">
+                  <div style="font-size:11px;font-weight:700;letter-spacing:0.14em;
+                    text-transform:uppercase;color:{_TEXT_MUTED};">{html.escape(date_str)}</div>
+                  <div style="font-family:{_SERIF_STACK};font-size:38px;line-height:1.1;
+                    font-weight:700;letter-spacing:-0.01em;color:{_TEXT_HEADING};
+                    margin-top:8px;">Daily Digest</div>
+                  {summary_html}
+                  {_topic_strip_html(summary)}
+                  {_topic_index_html(summary)}
                   {_fact_block(fact)}
                   {failure_notice}
                   {body}
-                  <div style="padding-top:22px;border-top:1px solid {_BORDER};
-                    font-size:12px;color:{_TEXT_MUTED};text-align:center;">
-                    Generated automatically. Edit topics.json in your repo to customize topics and sources.
+                  <div style="margin-top:36px;padding-top:20px;border-top:1px solid {_BORDER};
+                    font-size:12px;line-height:1.6;color:{_TEXT_MUTED};">
+                    {html.escape(_footer_text(summary))}
                   </div>
                 </td>
               </tr>
@@ -1559,55 +1788,80 @@ def check_email_size(html_body):
 # past it, so a digest that large is sent as the full version only.
 AMP_MAX_BYTES = 200_000
 
+def _amp_ink_css():
+    """Per-topic ink rules. A topic's wrapper carries its ink class, and
+    these colour its name, toggle, links and index mark."""
+    rules = ""
+    for i, ink in enumerate(_TOPIC_INKS):
+        rules += (
+            f".ink{i} .topic-name, .ink{i} .toggle, .ink{i} .source-list a, "
+            f".ink{i} .arrow, .ink{i} .mark {{ color:{ink}; }}\n"
+            f".bg{i} {{ background:{ink}; }}\n"
+        )
+    return rules
+
+
 # Class-based rather than inline like the HTML version: AMP allows a
 # stylesheet, and one set of rules is far smaller than repeating them on
-# every element. The palette is shared, so both versions look the same.
+# every element. The palette and type are shared, so both versions look the
+# same.
 _AMP_CSS = f"""
-body {{ margin:0; padding:0; background:{_PAGE_BG}; font-family:{_FONT_STACK}; }}
-.wrap {{ max-width:640px; margin:0 auto; padding:28px 12px; }}
-.card {{ background:{_CARD_BG}; border-radius:10px; padding:32px 28px; }}
-.title {{ font-size:23px; font-weight:700; color:{_TEXT_HEADING}; letter-spacing:-0.01em; }}
-.date {{ font-size:13px; color:{_TEXT_MUTED}; margin-top:4px; }}
-.contents {{ margin-top:16px; font-size:13px; color:{_TEXT_MUTED}; }}
-.hint {{ margin-top:4px; font-size:12px; color:{_TEXT_MUTED}; }}
-.fact {{ margin-top:20px; padding:16px 18px; background:{_FACT_BG};
-  border:1px solid {_FACT_BORDER}; border-radius:8px; }}
-.label {{ font-size:10px; font-weight:700; letter-spacing:0.07em;
-  text-transform:uppercase; color:{_ACCENT}; margin-bottom:8px; }}
-.fact-text {{ font-size:15px; font-weight:600; color:{_TEXT_HEADING}; line-height:1.55; margin:0; }}
-.fact-why {{ font-size:14px; color:{_TEXT_BODY}; line-height:1.6; margin:8px 0 0 0; }}
-.warn {{ margin:20px 0 0 0; padding:12px 14px; background:{_WARN_BG};
-  border:1px solid {_WARN_BORDER}; border-radius:6px; font-size:13px; color:{_WARN_TEXT}; }}
-.topic {{ padding:26px 0 6px 0; border-top:1px solid {_BORDER}; }}
-.topic-name {{ font-size:11px; font-weight:700; letter-spacing:0.07em;
-  text-transform:uppercase; color:{_ACCENT}; margin-bottom:10px; }}
-.overview {{ font-size:16px; color:{_TEXT_HEADING}; line-height:1.6; margin:0 0 6px 0; }}
-.note {{ font-size:14px; color:{_TEXT_MUTED}; line-height:1.6; margin:0 0 4px 0; }}
-.stories {{ margin-top:12px; }}
+body {{ margin:0; padding:0; background:{_PAGE_BG}; font-family:{_FONT_STACK}; color:{_TEXT_BODY}; }}
+.wrap {{ max-width:640px; margin:0 auto; padding:24px 10px; }}
+.card {{ background:{_CARD_BG}; border-radius:6px; padding:34px 30px 30px 30px; }}
+.dateline {{ font-size:11px; font-weight:700; letter-spacing:0.14em;
+  text-transform:uppercase; color:{_TEXT_MUTED}; }}
+.title {{ font-family:{_SERIF_STACK}; font-size:38px; line-height:1.1; font-weight:700;
+  letter-spacing:-0.01em; color:{_TEXT_HEADING}; margin-top:8px; }}
+.summary {{ margin-top:8px; font-size:13px; color:{_TEXT_MUTED}; }}
+.strip {{ display:flex; height:6px; margin-top:18px; }}
+.seg {{ height:6px; }}
+.seg + .seg {{ border-left:2px solid {_CARD_BG}; }}
+.index {{ margin-top:10px; font-size:13px; line-height:1.9; }}
+.entry {{ white-space:nowrap; margin-right:14px; }}
+.entry-name {{ color:{_TEXT_BODY}; }}
+.hint {{ margin-top:2px; font-size:12px; color:{_TEXT_MUTED}; }}
+.fact {{ margin-top:34px; }}
+.label {{ font-size:11px; font-weight:700; letter-spacing:0.12em;
+  text-transform:uppercase; color:{_TEXT_MUTED}; }}
+.fact-text {{ font-family:{_SERIF_STACK}; font-size:22px; line-height:1.4;
+  color:{_TEXT_HEADING}; margin:10px 0 0 0; }}
+.fact-why {{ font-size:15px; color:{_TEXT_BODY}; line-height:1.65; margin:10px 0 0 0; }}
+.warn {{ margin:28px 0 0 0; padding:12px 14px; background:{_WARN_BG};
+  border:1px solid {_WARN_BORDER}; border-radius:4px; font-size:13px; color:{_WARN_TEXT}; }}
+.topic {{ margin-top:36px; padding-top:30px; border-top:1px solid {_BORDER}; }}
+.topic-name {{ font-family:{_SERIF_STACK}; font-size:25px; line-height:1.2;
+  font-weight:700; color:{_ACCENT}; }}
+.topic-meta {{ margin-top:5px; font-size:12px; color:{_TEXT_MUTED}; }}
+.overview {{ font-size:17px; color:{_TEXT_HEADING}; line-height:1.6; margin:14px 0 0 0; }}
+.note {{ font-size:14px; color:{_TEXT_MUTED}; line-height:1.6; margin:14px 0 0 0; }}
+.stories {{ margin-top:18px; }}
 .story {{ border-top:1px solid {_BORDER}; }}
 .story > .story-head {{ display:flex; align-items:center; justify-content:space-between;
-  background:{_CARD_BG}; border:0; margin:0; padding:13px 0; cursor:pointer;
-  font-size:15px; font-weight:700; color:{_TEXT_HEADING}; line-height:1.35; }}
+  background:{_CARD_BG}; border:0; margin:0; padding:15px 0; cursor:pointer;
+  font-size:16px; font-weight:600; color:{_TEXT_HEADING}; line-height:1.4; }}
 .toggle {{ flex:none; margin-left:14px; font-size:20px; font-weight:400;
   line-height:1; color:{_ACCENT}; }}
 .less {{ display:none; }}
 .story[expanded] .more {{ display:none; }}
 .story[expanded] .less {{ display:inline; }}
-.story-body {{ padding:0 0 14px 0; }}
-.para {{ font-size:15px; color:{_TEXT_BODY}; line-height:1.6; margin:0 0 12px 0; }}
-.sources {{ margin-top:4px; }}
-.sources-label {{ font-size:10px; font-weight:700; letter-spacing:0.06em;
-  text-transform:uppercase; color:{_TEXT_MUTED}; margin-bottom:6px; }}
+.story-body {{ padding:0 0 16px 0; }}
+.para {{ font-size:15px; color:{_TEXT_BODY}; line-height:1.65; margin:0 0 12px 0; }}
+.sources {{ margin-top:14px; }}
+.sources-label {{ font-size:10px; font-weight:700; letter-spacing:0.12em;
+  text-transform:uppercase; color:{_TEXT_MUTED}; margin-bottom:7px; }}
 .source-list {{ margin:0; padding:0; list-style:none; font-size:13px; line-height:1.5; }}
-.source-list li {{ margin:0 0 6px 0; }}
-.source-list a {{ color:{_ACCENT}; text-decoration:none; font-weight:500; }}
-.plain {{ color:{_TEXT_BODY}; font-weight:500; }}
+.source-list li {{ margin:0 0 7px 0; }}
+.source-list a {{ color:{_ACCENT}; text-decoration:none; font-weight:600; }}
+.plain {{ color:{_TEXT_BODY}; font-weight:600; }}
 .muted {{ color:{_TEXT_MUTED}; }}
 .arrow {{ color:{_ACCENT}; }}
-.empty {{ padding:26px 0; border-top:1px solid {_BORDER}; font-size:15px; color:{_TEXT_BODY}; }}
-.footer {{ margin-top:20px; padding-top:22px; border-top:1px solid {_BORDER};
-  font-size:12px; color:{_TEXT_MUTED}; text-align:center; }}
-"""
+.mark {{ color:{_ACCENT}; }}
+.empty {{ margin-top:36px; padding-top:30px; border-top:1px solid {_BORDER};
+  font-size:15px; color:{_TEXT_BODY}; }}
+.footer {{ margin-top:36px; padding-top:20px; border-top:1px solid {_BORDER};
+  font-size:12px; line-height:1.6; color:{_TEXT_MUTED}; }}
+""" + _amp_ink_css()
 
 
 def _amp_paragraphs(text, css_class):
@@ -1629,10 +1883,36 @@ def _amp_sources(sources, label="Sources"):
         items += f'<li><span class="arrow">&#8250;</span> {title_html}{outlet_bit}</li>'
     if not items:
         return ""
-    return (
-        f'<div class="sources"><div class="sources-label">{label}</div>'
-        f'<ul class="source-list">{items}</ul></div>'
+    heading = f'<div class="sources-label">{label}</div>' if label else ""
+    return f'<div class="sources">{heading}<ul class="source-list">{items}</ul></div>'
+
+
+def _amp_strip(summary):
+    """The masthead strip for the AMP copy. Segment widths change every day,
+    so they're written as rules appended to this email's stylesheet rather
+    than as inline styles."""
+    topics = [t for t in summary["topics"] if t["count"]]
+    total = sum(t["count"] for t in topics)
+    if not total:
+        return "", ""
+    segments = ""
+    css = ""
+    for position, t in enumerate(topics):
+        ink_class = f"bg{t['index'] % len(_TOPIC_INKS)}"
+        segments += f'<div class="seg s{position} {ink_class}"></div>'
+        css += f".s{position} {{ width:{t['count'] / total * 100:.1f}%; }}\n"
+    return f'<div class="strip">{segments}</div>', css
+
+
+def _amp_index(summary):
+    entries = "".join(
+        f'<span class="entry ink{t["index"] % len(_TOPIC_INKS)}">'
+        f'<span class="mark">&#9632;</span> '
+        f'<span class="entry-name">{html.escape(t["name"])}</span> '
+        f'<span class="muted">{t["count"]}</span></span>'
+        for t in summary["topics"]
     )
+    return f'<div class="index">{entries}</div>' if entries else ""
 
 
 def _story_label(story):
@@ -1658,17 +1938,16 @@ def build_amp(topic_results, date_str, fact=None):
     and sources folded under its subheading. The topic overviews and the
     fact stay open, since they're what a quick read is for.
     """
+    summary = _digest_summary(topic_results, fact, collapsible=True)
     sections = []
     failed_topics = []
-    topic_names = []
     has_accordion = False
 
-    for topic_name, brief, note in topic_results:
+    for index, (topic_name, brief, note) in enumerate(topic_results):
         if note:
             failed_topics.append(topic_name)
         if not brief:
             continue
-        topic_names.append(topic_name)
 
         if brief.get("degraded"):
             # The headline fallback is already one line per story with
@@ -1683,7 +1962,7 @@ def build_amp(topic_results, date_str, fact=None):
             inner = _amp_paragraphs(brief.get("overview"), "overview")
             rows = ""
             for story in brief.get("stories") or []:
-                body = _amp_paragraphs(story.get("detail"), "para") + _amp_sources(story.get("sources"))
+                body = _amp_paragraphs(story.get("detail"), "para") + _amp_sources(story.get("sources"), None)
                 if not body:
                     body = '<p class="para">No further detail.</p>'
                 rows += (
@@ -1699,7 +1978,10 @@ def build_amp(topic_results, date_str, fact=None):
                 inner += f'<amp-accordion class="stories">{rows}</amp-accordion>'
 
         sections.append(
-            f'<div class="topic"><div class="topic-name">{html.escape(topic_name)}</div>{inner}</div>'
+            f'<div class="topic ink{index % len(_TOPIC_INKS)}">'
+            f'<div class="topic-name">{html.escape(topic_name)}</div>'
+            f'<div class="topic-meta">{html.escape(_topic_meta(brief))}</div>'
+            f"{inner}</div>"
         )
 
     body = "".join(sections) if sections else (
@@ -1713,11 +1995,12 @@ def build_amp(topic_results, date_str, fact=None):
             f'<div class="warn">Skipped this run: {names}. Check the Actions log for details.</div>'
         )
 
-    contents = ""
-    if topic_names:
-        contents = f'<div class="contents">In today\'s digest: {html.escape(", ".join(topic_names))}</div>'
-        if has_accordion:
-            contents += '<div class="hint">Tap a story to read more.</div>'
+    summary_line = _summary_line(summary, collapsible=True)
+    summary_html = f'<div class="summary">{html.escape(summary_line)}</div>' if summary_line else ""
+    strip_html, strip_css = _amp_strip(summary)
+    index_html = _amp_index(summary)
+    if has_accordion:
+        index_html += '<div class="hint">Tap a story to read more.</div>'
 
     fact_html = ""
     if fact:
@@ -1737,17 +2020,19 @@ def build_amp(topic_results, date_str, fact=None):
       <script async custom-element="amp-accordion"
         src="https://cdn.ampproject.org/v0/amp-accordion-0.1.js"></script>
       <style amp4email-boilerplate>body{{visibility:hidden}}</style>
-      <style amp-custom>{_AMP_CSS}</style>
+      <style amp-custom>{_AMP_CSS}{strip_css}</style>
     </head>
     <body>
       <div class="wrap"><div class="card">
-        <div class="title">Your Daily Digest</div>
-        <div class="date">{html.escape(date_str)}</div>
-        {contents}
+        <div class="dateline">{html.escape(date_str)}</div>
+        <div class="title">Daily Digest</div>
+        {summary_html}
+        {strip_html}
+        {index_html}
         {fact_html}
         {failure_notice}
         {body}
-        <div class="footer">Generated automatically. Edit topics.json in your repo to customize topics and sources.</div>
+        <div class="footer">{html.escape(_footer_text(summary))}</div>
       </div></div>
     </body>
     </html>

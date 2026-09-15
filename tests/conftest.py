@@ -256,8 +256,8 @@ SAMPLE_BRIEF = {
 }
 
 SAMPLE_FACT = {
-    "fact": "Honeybees communicate distance with a waggle dance.",
-    "why": "It was one of the first animal languages decoded.",
+    "fact": "Honeybees tell each other how far away flowers are by dancing.",
+    "explanation": "The longer a bee waggles, the farther the flowers. The angle of the dance points the way.",
 }
 
 

@@ -191,6 +191,10 @@ def test_nothing_in_the_plain_version_is_missing_from_the_collapsible_one():
     folded = visibility(build(results, fact, collapsible=True))
     folded_text = " ".join(folded.visible)
     for piece in plain.visible:
+        # The reading-time estimate differs on purpose: "read" when every
+        # story is open, "to skim" when they're folded.
+        if " min " in piece:
+            continue
         assert piece.strip() in folded_text, piece
     assert sorted(plain.hrefs) == sorted(folded.hrefs)
 
