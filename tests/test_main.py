@@ -299,6 +299,67 @@ def test_oversized_collapsible_copy_is_dropped_not_sent_broken(write_config, mai
     assert "full version only" in capsys.readouterr().err
 
 
+# --------------------------------------------------------------------------
+# Turning the Gmail version off alone
+# --------------------------------------------------------------------------
+
+def run_and_collect(write_config, sent, **settings):
+    write_config(config(topic("Tech"), **settings))
+    digest.main()
+    [(subject, body)] = sent
+    [amp] = sent.amp
+    return subject, body, amp
+
+
+def test_gmail_folding_can_be_turned_off_while_other_apps_keep_folding(write_config, mail_env, sent,
+                                                                         fake_pipeline, capsys):
+    _, body, amp = run_and_collect(write_config, sent, gmail_folding=False)
+    assert amp is None
+    assert 'type="checkbox"' in body and "dd-story" in body
+    out = capsys.readouterr().out
+    assert "Gmail folding is off" in out
+    assert "Collapsible version is" not in out
+
+
+def test_turning_gmail_folding_off_leaves_the_regular_email_as_it_was(write_config, mail_env, sent,
+                                                                       fake_pipeline):
+    _, with_gmail, _ = run_and_collect(write_config, sent)
+    sent.clear()
+    sent.amp.clear()
+    _, without_gmail, amp = run_and_collect(write_config, sent, gmail_folding=False)
+    assert amp is None
+    assert without_gmail == with_gmail
+
+
+def test_a_config_that_never_mentions_gmail_folding_behaves_as_before(write_config, mail_env, sent,
+                                                                        fake_pipeline):
+    _, _, amp = run_and_collect(write_config, sent)
+    assert amp and "<amp-accordion" in amp
+    sent.clear()
+    sent.amp.clear()
+    _, body, amp = run_and_collect(write_config, sent, collapsible_stories=False)
+    assert amp is None
+    assert "<input" not in body
+
+
+def test_gmail_folding_alone_can_keep_the_gmail_version_when_the_rest_is_open(write_config, mail_env, sent,
+                                                                              fake_pipeline):
+    _, body, amp = run_and_collect(write_config, sent, collapsible_stories=False, gmail_folding=True)
+    assert amp and "<amp-accordion" in amp
+    assert "<input" not in body
+
+
+def test_both_settings_on_is_the_default(write_config, mail_env, sent, fake_pipeline):
+    _, body, amp = run_and_collect(write_config, sent, collapsible_stories=True, gmail_folding=True)
+    assert amp and 'type="checkbox"' in body
+
+
+def test_both_off_sends_the_open_email_alone(write_config, mail_env, sent, fake_pipeline, capsys):
+    _, body, amp = run_and_collect(write_config, sent, collapsible_stories=False, gmail_folding=False)
+    assert amp is None and "<input" not in body
+    assert "Gmail folding is off" not in capsys.readouterr().out
+
+
 def test_send_failure_exits_non_zero(write_config, mail_env, fake_pipeline, monkeypatch, capsys):
     def refuse(subject, body, amp_body=None):
         raise OSError("535 Username and Password not accepted")

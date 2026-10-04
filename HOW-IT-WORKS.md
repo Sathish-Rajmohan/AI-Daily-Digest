@@ -291,6 +291,11 @@ checkbox version was tested in Chromium and in WebKit, the engine Apple Mail
 uses, at desktop and phone widths. It hasn't been tried in every app on a real
 device, so turn off `collapsible_stories` if one misbehaves.
 
+Two settings control the two methods. `collapsible_stories` switches both
+together. `gmail_folding` switches the AMP version alone and follows
+`collapsible_stories` until it's set. With only `gmail_folding` off, Gmail shows
+every story open and the other apps keep folding.
+
 Tapping a story's text closes it, the same as tapping its heading. Links inside
 a story open as usual. Topic overviews and the fact never fold, and tests check
 that everything in the open version of the email is also in both folding

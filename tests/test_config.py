@@ -122,6 +122,8 @@ def test_malformed_topic_is_rejected_with_a_clear_message(write_config, bad_topi
     ({"lookback_hours": True}, "lookback_hours"),
     ({"fact_of_the_day": "false"}, "fact_of_the_day"),
     ({"collapsible_stories": "yes"}, "collapsible_stories"),
+    ({"gmail_folding": "no"}, "gmail_folding"),
+    ({"gmail_folding": 0}, "gmail_folding"),
     ({"email_subject_prefix": 7}, "email_subject_prefix"),
     ({"timezone": 10}, "timezone"),
     ({"deliver_at": 8}, "deliver_at"),

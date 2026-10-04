@@ -113,7 +113,7 @@ def _check_settings(settings):
     if isinstance(lookback, bool) or not isinstance(lookback, (int, float)) or lookback <= 0:
         raise ValueError(f"{CONFIG_PATH}: 'lookback_hours' must be a number above 0")
 
-    for key in ("fact_of_the_day", "collapsible_stories"):
+    for key in ("fact_of_the_day", "collapsible_stories", "gmail_folding"):
         if not isinstance(settings.get(key, True), bool):
             raise ValueError(f"{CONFIG_PATH}: '{key}' must be true or false")
 
@@ -2148,14 +2148,19 @@ def main():
     print(f"Model time used: {TOTAL_BUDGET - _budget_left():.0f}s of {TOTAL_BUDGET}s")
 
     date_str = now_local.strftime("%A, %d %B %Y")
-    # One setting controls the AMP copy and the checkbox folding.
+    # The checkbox folding runs in most apps, and the AMP copy is how Gmail
+    # folds. gmail_folding turns the AMP copy off alone and follows
+    # collapsible_stories when it isn't set.
     collapsible = settings.get("collapsible_stories", True)
+    gmail_folding = settings.get("gmail_folding", collapsible)
     html_body = build_html(topic_results, date_str, fact, collapsible=collapsible)
     subject = f"{subject_prefix} - {date_str}"
     check_email_size(html_body)
 
     amp_body = None
-    if collapsible:
+    if collapsible and not gmail_folding:
+        print("Gmail folding is off, so Gmail shows every story open. Other apps still fold them.")
+    if gmail_folding:
         amp_body = build_amp(topic_results, date_str, fact)
         amp_size = len(amp_body.encode("utf-8"))
         print(f"Collapsible version is {amp_size / 1024:.0f}KB (AMP allows {AMP_MAX_BYTES // 1000}KB)")

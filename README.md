@@ -254,7 +254,8 @@ These go in the `settings` block at the end of `topics.json`:
 | `timezone` | Time zone for the date in the email, as an IANA name such as `Europe/London`. |
 | `deliver_at` | Optional, off unless you add it. A time such as `"08:00"` in your `timezone`. A scheduled run that finishes early waits until then to send. [Delivery time](#delivery-time) explains how to use it. |
 | `fact_of_the_day` | `false` removes the fact from the top of the email. |
-| `collapsible_stories` | `false` sends every story fully open. |
+| `collapsible_stories` | `false` sends every story fully open, in every app. |
+| `gmail_folding` | Optional. `false` turns off the version Gmail folds with, so Gmail shows every story open while Apple Mail and the other apps still fold. Without it, this follows `collapsible_stories`. Use it if tapping a story in Gmail on an iPhone [sends you back to the top](#tapping-a-story-in-gmail-on-iphone-jumps-to-the-top). |
 
 A mistake in `topics.json` stops the run with a message that says what to fix.
 
@@ -423,6 +424,22 @@ servers being busy. If it keeps happening, remove a topic or add a
 Go back over [step 8](#8-collapsible-stories-in-gmail). The log warns if
 `GMAIL_ADDRESS` and `RECIPIENT_EMAIL` are the same, or if the folding version
 was too large to send.
+
+### Tapping a story in Gmail on iPhone jumps to the top
+
+In the Gmail app on an iPhone, opening or closing a story can send you back to
+the top of the email. With a long digest that is worse than having every story
+open. Only the version of the email that Gmail folds is affected, so turn that
+off and leave the rest alone. In `topics.json`, add this to `settings`:
+
+```json
+"gmail_folding": false
+```
+
+Gmail then shows every story open, and Apple Mail, Yahoo and the others still
+fold them. You don't need to change `collapsible_stories`. Gmail's version is
+also the reason step 8 needs a second sending address, so with `gmail_folding`
+off you can skip step 8 and read the digest from your own account.
 
 ### Gmail shows `[Message clipped]`
 
