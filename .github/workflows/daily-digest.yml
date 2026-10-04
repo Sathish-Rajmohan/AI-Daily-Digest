@@ -12,9 +12,11 @@ jobs:
   send-digest:
     runs-on: ubuntu-latest
     # A worst-case run takes about 30 minutes: every feed timing out, the
-    # full 15-minute model budget (TOTAL_BUDGET), then sending. This limit
-    # stops a stuck run long before GitHub's default of 6 hours.
-    timeout-minutes: 35
+    # full 15-minute model budget (TOTAL_BUDGET), then sending. On top of that
+    # a run can wait up to 3 hours for deliver_at (MAX_HOLD in digest.py), so
+    # the limit is 35 + 180 minutes. It still stops a stuck run well before
+    # GitHub's default of 6 hours.
+    timeout-minutes: 215
     steps:
       - name: Check out repo
         uses: actions/checkout@v7
@@ -35,4 +37,11 @@ jobs:
           GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
           RECIPIENT_EMAIL: ${{ secrets.RECIPIENT_EMAIL }}
+          # The cron entry that started a scheduled run, empty for a manual
+          # one. The script works out from it when the run was due, to log
+          # how late it started and to know when to send.
+          DIGEST_SCHEDULE: ${{ github.event.schedule }}
+          # Only needed if the schedule's own timezone differs from the one in
+          # topics.json, such as a UTC cron entry with no timezone key.
+          # DIGEST_SCHEDULE_TZ: "UTC"
         run: python digest.py

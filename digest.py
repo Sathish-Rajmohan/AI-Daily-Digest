@@ -58,6 +58,13 @@ USER_AGENT = (
     "RSS reader for personal digest)"
 )
 
+# Longest a finished run waits for deliver_at. Waiting uses Actions minutes, so
+# it's capped, and the workflow's timeout has to cover it on top of a
+# worst-case run.
+MAX_HOLD = 180 * 60
+
+DELIVER_AT = re.compile(r"([01]?\d|2[0-3]):([0-5]\d)")
+
 
 def load_config():
     with open(CONFIG_PATH, "r", encoding="utf-8") as f:
@@ -113,6 +120,12 @@ def _check_settings(settings):
     for key in ("email_subject_prefix", "timezone"):
         if key in settings and not isinstance(settings[key], str):
             raise ValueError(f"{CONFIG_PATH}: '{key}' must be text")
+
+    deliver_at = settings.get("deliver_at")
+    if deliver_at is not None and not (
+        isinstance(deliver_at, str) and DELIVER_AT.fullmatch(deliver_at)
+    ):
+        raise ValueError(f"{CONFIG_PATH}: 'deliver_at' must be a 24-hour time such as \"08:00\"")
 
 
 def parse_entry_time(entry):
@@ -1929,6 +1942,56 @@ def send_email(subject, html_body, amp_body=None):
         server.sendmail(sender, [recipient], msg.as_string())
 
 
+# When a run was meant to start, and when it should send. Scheduled runs are
+# set off by a cron entry that GitHub starts late, so these work out the time
+# the entry was due from the entry itself. A manual run has no such time.
+
+def _local_time_on(day, hour, minute, tz):
+    """That clock time on that date in tz, as UTC. The conversion has to come
+    first, because subtracting two datetimes that share one ZoneInfo ignores
+    daylight saving.
+    """
+    return datetime(day.year, day.month, day.day, hour, minute, tzinfo=tz).astimezone(timezone.utc)
+
+
+def scheduled_start(cron, tz, now):
+    """When the cron entry that started this run was due, in UTC. This is the
+    daily occurrence nearest to `now`, so a start a few seconds early still
+    counts as today's. None unless the entry is a plain daily time like
+    "0 8 * * *".
+    """
+    fields = (cron or "").split()
+    if len(fields) != 5 or fields[2:] != ["*", "*", "*"]:
+        return None
+    if not (fields[0].isdigit() and fields[1].isdigit()):
+        return None
+    minute, hour = int(fields[0]), int(fields[1])
+    if minute > 59 or hour > 23:
+        return None
+    now = now.astimezone(timezone.utc)
+    today = now.astimezone(tz).date()
+    due = [_local_time_on(today + timedelta(days=d), hour, minute, tz) for d in (-1, 0, 1)]
+    return min(due, key=lambda t: abs(t - now))
+
+
+def delivery_time(deliver_at, scheduled, tz):
+    """The first deliver_at ("HH:MM" in tz) at or after the scheduled start, in UTC."""
+    hour, minute = (int(part) for part in deliver_at.split(":"))
+    day = scheduled.astimezone(tz).date()
+    due = _local_time_on(day, hour, minute, tz)
+    if due < scheduled:
+        due = _local_time_on(day + timedelta(days=1), hour, minute, tz)
+    return due
+
+
+def _minutes(delta):
+    return round(delta.total_seconds() / 60)
+
+
+def _stamp(moment, tz):
+    return moment.astimezone(tz).strftime("%a %d %b %H:%M %Z")
+
+
 def main():
     missing = [k for k in ("GMAIL_ADDRESS", "GMAIL_APP_PASSWORD") if not os.environ.get(k)]
     if missing:
@@ -1962,9 +2025,51 @@ def main():
 
     try:
         local_tz = ZoneInfo(local_tz_name)
+        tz_known = True
     except Exception:
         print(f"  [warn] unknown timezone '{local_tz_name}', falling back to UTC", file=sys.stderr)
         local_tz = timezone.utc
+        tz_known = False
+
+    started = datetime.now(timezone.utc)
+    due = None          # when the schedule meant this run to start
+    deliver = None      # when to send, if deliver_at applies to this run
+    deliver_at = settings.get("deliver_at")
+    scheduled_run = os.environ.get("GITHUB_EVENT_NAME") == "schedule"
+    if scheduled_run:
+        cron = os.environ.get("DIGEST_SCHEDULE", "").strip()
+        # The cron entry runs in the workflow's time zone, which is the
+        # settings one unless the workflow says otherwise.
+        cron_tz = local_tz
+        cron_tz_name = os.environ.get("DIGEST_SCHEDULE_TZ", "").strip()
+        if cron_tz_name:
+            try:
+                cron_tz = ZoneInfo(cron_tz_name)
+            except Exception:
+                print(f"  [warn] unknown DIGEST_SCHEDULE_TZ '{cron_tz_name}', using the settings time zone",
+                      file=sys.stderr)
+        due = scheduled_start(cron, cron_tz, started)
+        if due:
+            print(f"Scheduled for {_stamp(due, local_tz)}, started {_stamp(started, local_tz)}: "
+                  f"{_minutes(started - due)} min late.")
+        else:
+            print(f"  [warn] scheduled run, but the schedule ({cron!r}) isn't a plain daily time, "
+                  "so the start can't be measured.", file=sys.stderr)
+    else:
+        print("Manual run, so there's no scheduled time to measure the start against.")
+
+    if deliver_at:
+        if due and tz_known:
+            deliver = delivery_time(deliver_at, due, local_tz)
+            # Count the window from the scheduled start and not the real one,
+            # so a late start can't leave a gap after the previous digest.
+            lookback_hours += max(0.0, (started - due).total_seconds()) / 3600
+        elif not scheduled_run:
+            print("deliver_at only applies to scheduled runs, so this one sends as soon as it's ready.")
+        else:
+            print("  [warn] deliver_at is set but can't be applied, so this run sends as soon "
+                  "as it's ready. It needs a readable schedule and a known timezone.",
+                  file=sys.stderr)
 
     topic_results = []
     start_budget()
@@ -2025,7 +2130,9 @@ def main():
             file=sys.stderr,
         )
 
-    now_local = datetime.now(local_tz)
+    # A held digest is dated for the day it's delivered, which can differ from
+    # the day it was written.
+    now_local = deliver.astimezone(local_tz) if deliver else datetime.now(local_tz)
 
     # The fact comes last so the topics use the time budget first. If it fails,
     # the email goes out without it.
@@ -2061,12 +2168,37 @@ def main():
             )
             amp_body = None
 
+    waited = 0
+    if deliver:
+        left = (deliver - datetime.now(timezone.utc)).total_seconds()
+        if left > 0:
+            wait = min(left, MAX_HOLD)
+            if wait < left:
+                print(f"  [warn] deliver_at is {left / 60:.0f} min away, past the {MAX_HOLD // 60} min "
+                      "hold limit, so this run only waits that long.", file=sys.stderr)
+            print(f"Ready early. Holding {wait / 60:.0f} min until {_stamp(deliver, local_tz)}.")
+            time.sleep(wait)
+            waited = wait
+        else:
+            print(f"Ready {_minutes(timedelta(seconds=-left))} min after deliver_at. Sending now.")
+
     print("Sending email...")
     try:
         send_email(subject, html_body, amp_body)
     except Exception as e:
         print(f"ERROR: failed to send email: {e}", file=sys.stderr)
         sys.exit(1)
+    sent = datetime.now(timezone.utc)
+
+    # One line per run that says how late it started, how long it waited and
+    # when it sent, so the logs can be compared run to run.
+    timing = f"started {_stamp(started, local_tz)}"
+    if due:
+        timing = f"due {_stamp(due, local_tz)}, {timing} ({_minutes(started - due)} min late)"
+    timing += f", waited {_minutes(timedelta(seconds=waited))} min, sent {_stamp(sent, local_tz)}"
+    if deliver:
+        timing += f" ({_minutes(sent - deliver)} min after deliver_at)"
+    print(f"Timing: {timing}.")
     print("Done.")
 
 

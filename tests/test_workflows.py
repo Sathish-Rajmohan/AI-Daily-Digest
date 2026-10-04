@@ -10,6 +10,7 @@ import os
 import re
 import subprocess
 import sys
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -22,7 +23,11 @@ WORKFLOWS = ROOT / ".github" / "workflows"
 
 # Every environment variable digest.py reads, split by who sets it.
 SECRETS = {"GEMINI_API_KEY", "GROQ_API_KEY", "GMAIL_ADDRESS", "GMAIL_APP_PASSWORD", "RECIPIENT_EMAIL"}
-OPTIONAL_OVERRIDES = {"GEMINI_MODELS", "GEMINI_MODEL", "GROQ_MODELS", "DIGEST_CONFIG_PATH"}
+OPTIONAL_OVERRIDES = {"GEMINI_MODELS", "GEMINI_MODEL", "GROQ_MODELS", "DIGEST_CONFIG_PATH",
+                      "DIGEST_SCHEDULE_TZ"}
+# How the script learns which trigger started it. Actions sets the first, and
+# the workflow passes the second.
+RUN_CONTEXT = {"GITHUB_EVENT_NAME", "DIGEST_SCHEDULE"}
 
 
 def load_workflow(name):
@@ -121,17 +126,24 @@ def test_workflow_python_is_new_enough_for_the_script(digest_workflow):
 def test_every_environment_variable_the_script_reads_is_accounted_for():
     source = (ROOT / "digest.py").read_text(encoding="utf-8")
     read = set(re.findall(r'os\.environ(?:\.get\(\s*|\[)"([A-Z_]+)"', source))
-    assert read == SECRETS | OPTIONAL_OVERRIDES
+    assert read == SECRETS | OPTIONAL_OVERRIDES | RUN_CONTEXT
 
 
 def test_every_secret_reaches_the_script_under_its_own_name(digest_workflow):
     env = run_step(digest_workflow)["env"]
-    assert set(env) == SECRETS
-    for name, value in env.items():
-        assert value.replace(" ", "") == "${{secrets.%s}}" % name
+    assert set(env) == SECRETS | {"DIGEST_SCHEDULE"}
+    for name in SECRETS:
+        assert env[name].replace(" ", "") == "${{secrets.%s}}" % name
 
 
-def test_job_timeout_leaves_room_for_the_worst_case_run(digest_workflow):
+# Without this the script can't tell when a scheduled run was due, so it
+# can't measure lateness or hold until deliver_at.
+def test_the_workflow_tells_the_script_which_schedule_started_it(digest_workflow):
+    env = run_step(digest_workflow)["env"]
+    assert env["DIGEST_SCHEDULE"].replace(" ", "") == "${{github.event.schedule}}"
+
+
+def test_job_timeout_leaves_room_for_the_worst_case_run_and_the_longest_hold(digest_workflow):
     config = json.loads((ROOT / "topics.json").read_text(encoding="utf-8"))
     worst = 0
     for topic in config["topics"]:
@@ -143,9 +155,25 @@ def test_job_timeout_leaves_room_for_the_worst_case_run(digest_workflow):
     worst += digest.REQUEST_TIMEOUT       # one request started just before the budget ran out
     worst += 60                           # SMTP connection timeout
     worst += 180                          # checkout, Python setup, pip install
+    worst += digest.MAX_HOLD              # waiting for deliver_at, after the run's own work
     timeout = digest_workflow["jobs"]["send-digest"]["timeout-minutes"] * 60
     assert worst < timeout, f"worst case {worst}s against a {timeout}s job timeout"
     assert timeout < 360 * 60
+
+
+# deliver_at isn't shipped, so this checks nothing until someone sets it. Then
+# it stops a schedule and a delivery time that can't meet: a run that has to
+# wait longer than MAX_HOLD sends early instead.
+def test_a_shipped_deliver_at_is_within_reach_of_the_shipped_schedule(digest_workflow):
+    settings = json.loads((ROOT / "topics.json").read_text(encoding="utf-8")).get("settings", {})
+    if "deliver_at" not in settings:
+        pytest.skip("topics.json has no deliver_at")
+    [entry] = digest_workflow["on"]["schedule"]
+    tz = ZoneInfo(entry.get("timezone", "UTC"))
+    for day in range(1, 366, 7):          # weekly samples cover both daylight saving changes
+        due = digest.scheduled_start(entry["cron"], tz, datetime(2026, 1, 1, 12, tzinfo=timezone.utc) + timedelta(days=day))
+        hold = digest.delivery_time(settings["deliver_at"], due, ZoneInfo(settings["timezone"])) - due
+        assert hold.total_seconds() <= digest.MAX_HOLD, f"{hold} between the schedule and deliver_at"
 
 
 def test_topics_file_the_workflow_uses_is_where_the_script_looks():
@@ -206,7 +234,7 @@ def test_dev_requirements_build_on_the_runtime_ones():
 # --------------------------------------------------------------------------
 
 def run_script(tmp_path, **env_values):
-    env = {k: v for k, v in os.environ.items() if k not in SECRETS | OPTIONAL_OVERRIDES}
+    env = {k: v for k, v in os.environ.items() if k not in SECRETS | OPTIONAL_OVERRIDES | RUN_CONTEXT}
     env.update(env_values)
     return subprocess.run([sys.executable, str(ROOT / "digest.py")], cwd=tmp_path, env=env,
                           capture_output=True, text=True, timeout=120)

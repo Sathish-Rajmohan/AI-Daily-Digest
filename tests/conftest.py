@@ -279,6 +279,9 @@ def isolated(monkeypatch):
     monkeypatch.setattr(digest, "_deadline", None)
     digest._unusable_models.clear()
     digest._disabled_providers.clear()
+    # A test run on Actions would otherwise look like a scheduled run.
+    for name in ("GITHUB_EVENT_NAME", "DIGEST_SCHEDULE", "DIGEST_SCHEDULE_TZ"):
+        monkeypatch.delenv(name, raising=False)
 
     violations = []
 

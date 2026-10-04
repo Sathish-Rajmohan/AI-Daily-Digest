@@ -124,6 +124,12 @@ def test_malformed_topic_is_rejected_with_a_clear_message(write_config, bad_topi
     ({"collapsible_stories": "yes"}, "collapsible_stories"),
     ({"email_subject_prefix": 7}, "email_subject_prefix"),
     ({"timezone": 10}, "timezone"),
+    ({"deliver_at": 8}, "deliver_at"),
+    ({"deliver_at": "8am"}, "deliver_at"),
+    ({"deliver_at": "24:00"}, "deliver_at"),
+    ({"deliver_at": "08:60"}, "deliver_at"),
+    ({"deliver_at": "08:00:00"}, "deliver_at"),
+    ({"deliver_at": ""}, "deliver_at"),
 ])
 def test_malformed_settings_are_rejected_with_a_clear_message(write_config, settings, field):
     write_config({"topics": [topic()], "settings": settings})
@@ -134,3 +140,10 @@ def test_malformed_settings_are_rejected_with_a_clear_message(write_config, sett
 def test_fractional_lookback_is_allowed(write_config):
     write_config({"topics": [topic()], "settings": {"lookback_hours": 12.5}})
     assert digest.load_config()["settings"]["lookback_hours"] == 12.5
+
+
+@pytest.mark.parametrize("value", ["08:00", "8:05", "00:00", "23:59"])
+def test_deliver_at_accepts_a_24_hour_time(write_config, value):
+    write_config({"topics": [topic()], "settings": {"deliver_at": value}})
+    assert digest.load_config()["settings"]["deliver_at"] == value
+
