@@ -113,7 +113,7 @@ and click **Commit changes**.
    such as `"Europe/London"` or `"America/New_York"`. It sets the date shown in
    the email.
 2. In `.github/workflows/daily-digest.yml`, change `timezone` to the same name.
-   To change the hour, edit `cron: "0 8 * * *"`. The first number is the minute
+   To change the hour, edit `cron: "17 8 * * *"`. The first number is the minute
    and the second is the hour, so `"30 6 * * *"` starts the run at 6:30 AM.
    GitHub starts it late, often by hours, so the email arrives after that
    time. [Delivery time](#delivery-time) explains how to get it at a set time.
@@ -264,7 +264,7 @@ The schedule is set in
 [.github/workflows/daily-digest.yml](.github/workflows/daily-digest.yml):
 
 ```yaml
-- cron: "0 8 * * *"
+- cron: "17 8 * * *"
   timezone: "Australia/Sydney"
 ```
 

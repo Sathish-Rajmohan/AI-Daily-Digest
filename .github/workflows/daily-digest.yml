@@ -2,9 +2,12 @@ name: Daily News Digest
 
 on:
   schedule:
-    # 8:00 AM in Sydney every day. Cron uses UTC unless a timezone is set,
+    # 8:17 AM in Sydney every day. Cron uses UTC unless a timezone is set,
     # and with one set GitHub keeps the local time across daylight saving.
-    - cron: "0 8 * * *"
+    # The 17 is on purpose. GitHub delays scheduled runs most at the start of
+    # an hour, and "0 8 * * *" started every run 110 to 208 minutes late. See
+    # HOW-IT-WORKS.md, "When the email arrives".
+    - cron: "17 8 * * *"
       timezone: "Australia/Sydney"
   workflow_dispatch: {}   # manual run from the Actions tab
 
