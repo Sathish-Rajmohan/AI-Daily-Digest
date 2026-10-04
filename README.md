@@ -114,7 +114,9 @@ and click **Commit changes**.
    the email.
 2. In `.github/workflows/daily-digest.yml`, change `timezone` to the same name.
    To change the hour, edit `cron: "0 8 * * *"`. The first number is the minute
-   and the second is the hour, so `"30 6 * * *"` sends at 6:30 AM.
+   and the second is the hour, so `"30 6 * * *"` starts the run at 6:30 AM.
+   GitHub starts it late, often by hours, so the email arrives after that
+   time. [Delivery time](#delivery-time) explains how to get it at a set time.
 
 ### 6. Turn on the workflows and run it once
 
@@ -133,7 +135,8 @@ GitHub switches off the workflows in a new fork until you turn them on.
 5. Check the inbox of `RECIPIENT_EMAIL`. The first digest may land in spam, so
    mark it as not spam to keep the next ones in your inbox.
 
-After that, the digest arrives every morning at the time you set in step 5.
+After that, a digest is sent every morning. It will usually arrive some time
+after the time you set in step 5, as [delivery time](#delivery-time) explains.
 
 ### 7. Let the keepalive job push
 
@@ -249,6 +252,7 @@ These go in the `settings` block at the end of `topics.json`:
 | `lookback_hours` | How far back to look for articles. Raise it if late runs miss stories, lower it if stories repeat between days. |
 | `email_subject_prefix` | Text before the date in the subject line. |
 | `timezone` | Time zone for the date in the email, as an IANA name such as `Europe/London`. |
+| `deliver_at` | Optional, off unless you add it. A time such as `"08:00"` in your `timezone`. A scheduled run that finishes early waits until then to send. [Delivery time](#delivery-time) explains how to use it. |
 | `fact_of_the_day` | `false` removes the fact from the top of the email. |
 | `collapsible_stories` | `false` sends every story fully open. |
 
@@ -267,8 +271,54 @@ The schedule is set in
 [Step 5](#5-set-your-time-zone-and-delivery-time) covers changing it. Keep
 `timezone` here and in `topics.json` the same, so the date in the email matches
 the day it's sent. GitHub adjusts for daylight saving, and
-[crontab.guru](https://crontab.guru) helps with cron syntax. Scheduled runs can
-start late when GitHub is busy.
+[crontab.guru](https://crontab.guru) helps with cron syntax.
+
+**The email can arrive hours after the time you set.** GitHub starts a
+scheduled run when it has room, not at the time written in the file. Across
+this project's first 18 scheduled runs, from 15 September to 2 October 2026,
+every run started between 110 and 208 minutes late, and the delay was growing.
+Each run then took only 3 to 11 minutes, so the time is lost before the script
+starts. GitHub's documentation says scheduled runs are delayed at busy times,
+and that the start of each hour is the busiest. The exact cause here is still
+being tested. [When the email arrives](HOW-IT-WORKS.md#when-the-email-arrives)
+has the figures and what has been tried.
+
+Each run's log says how late it started and when it sent. Look for the line
+that begins `Timing:` near the end. Runs you start yourself from the **Actions**
+tab have no scheduled time, so they show no lateness.
+
+To get the email at the same time each day, start the run earlier and let it
+wait:
+
+1. In the workflow, set the schedule earlier than you want the email. Allow
+   the longest start delay you see in the logs plus half an hour for the run
+   itself.
+2. In `topics.json`, add `"deliver_at": "08:00"` to `settings`, using the time
+   you want the email, in your `timezone`.
+
+A run that finishes before `deliver_at` waits and then sends. A run that
+finishes after it sends at once and logs how late it was. For example, with
+`cron: "0 5 * * *"` and `"deliver_at": "08:00"`, the run starts some time after
+5:00, writes the briefings, and sends at 8:00 if it's ready by then.
+
+Things to know:
+
+- **The wait is capped at 3 hours.** A run that is ready more than 3 hours
+  before `deliver_at` sends after 3 hours, which is early, and says so in the
+  log. Starts that are hours late rarely reach the cap, so a schedule up to
+  about 4 hours before `deliver_at` can work.
+- **The wait uses Actions minutes.** It's free in a public repo. In a private
+  repo it counts against your plan's monthly minutes, and a run that waits an
+  hour a day uses about 30 hours a month.
+- **Manual runs never wait.** **Run workflow** sends as soon as the digest is
+  ready, whatever `deliver_at` says.
+- **The news is as old as the start, not the delivery time.** A run that starts
+  at 5:00 and sends at 8:00 holds stories from before 5:00.
+- **The window follows the schedule.** With `deliver_at` set, `lookback_hours`
+  counts back from the scheduled start and not the real one, so a day with a late
+  start doesn't leave a gap after the day before.
+- **The job's time limit is 215 minutes,** which is the longest run plus the
+  longest wait. Raise it if you raise the cap.
 
 ### A backup model
 
@@ -305,8 +355,13 @@ is reported at the end of the log.
 In the **Actions** tab, click **Daily News Digest**. If a banner says the
 workflow is disabled, click **Enable workflow**. GitHub disables scheduled
 workflows in new forks, and in public repos after 60 days without activity,
-which [step 7](#7-let-the-keepalive-job-push) prevents. Scheduled runs can
-also start late when GitHub is busy.
+which [step 7](#7-let-the-keepalive-job-push) prevents.
+
+### It arrives hours after the time I set
+
+GitHub starts scheduled runs late, by up to a few hours. The run's log shows how
+late in its `Timing:` line, and [delivery time](#delivery-time) explains how to
+have the email arrive at a set time.
 
 ### Gmail rejects the sign-in
 

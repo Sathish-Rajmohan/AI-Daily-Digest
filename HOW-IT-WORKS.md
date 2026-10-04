@@ -7,6 +7,7 @@ setup, which the [README](README.md) covers.
 - [How the writing is kept readable](#how-the-writing-is-kept-readable)
 - [The fact of the day](#the-fact-of-the-day)
 - [When a model is down](#when-a-model-is-down)
+- [When the email arrives](#when-the-email-arrives)
 - [How the email looks](#how-the-email-looks)
 - [Email length and Gmail clipping](#email-length-and-gmail-clipping)
 - [Collapsible stories](#collapsible-stories)
@@ -123,8 +124,8 @@ Model calls share a 15-minute budget. Fetching feeds and the pauses between
 topics don't count against it. Recent runs have taken five to nine minutes in
 total. When a wide outage uses up the budget, the run stops asking and sends
 headlines for the topics that are left. Without a budget, a run could keep
-retrying until the 35-minute workflow timeout and send nothing. The log shows
-how long each model took to answer and how much of the budget the run used.
+retrying until the workflow timeout and send nothing. The log shows how long
+each model took to answer and how much of the budget the run used.
 
 Groq only gets the first 45 articles of a topic. Its free tier limits tokens
 per minute, and a full list of 100 would use most of a minute's allowance on
@@ -144,6 +145,75 @@ subjects and angles is what keeps it from repeating.
 The JSON schema the model fills in is kept shallow, since Flash models are
 unreliable with deeply nested schemas. `maxOutputTokens` is set high because
 running out of tokens cuts the JSON off without an error.
+
+## When the email arrives
+
+The workflow is set for 8:00 AM Sydney time, and the email has never arrived
+then. These are GitHub's records of the first 18 scheduled runs, from 15
+September to 2 October 2026. They are the runs the first change to the schedule
+is compared with. `python run_history.py --to 2026-10-02` prints them.
+
+| | Earliest | Median | Latest |
+|---|---|---|---|
+| Run started, minutes after 8:00 | 110 | 135 | 208 |
+| Run length, minutes | 3.1 | 6.2 | 10.6 |
+| Email sent | 9:56 AM | about 10:20 AM | 11:37 AM |
+
+The script isn't the cause. Every run finished in under 11 minutes, so the time
+is lost between the scheduled time and GitHub creating the run. Every run was
+late, not some, and the delay was growing: starts were around 9:55 in the first
+week and between 11:03 and 11:27 in the last four days.
+
+Starting the run earlier doesn't fix this alone. The start time varied by 98
+minutes, so a buffer that covers the worst day starts the run about four hours
+before the email is due, and the news in it is four hours old. The spread has to
+come down first, and the buffer then covers what is left. The cause is being
+tested one change at a time, starting with moving the start off the top of the
+hour, which GitHub's documentation names as its busiest time.
+
+**Reading the numbers across a clock change.** Sydney's clocks went forward on
+4 October 2026, so the same 8:00 AM moved from 22:00 to 21:00 UTC. If GitHub's
+delay follows a fixed time in UTC and not the clock in Sydney, the lateness
+would shift by an hour on that day with nothing else changing. The first 18 runs
+are all before the change and any later schedule is all after it, so
+`run_history.py` prints each start in UTC beside the local time. Compare the
+two ways before reading a drop of an hour as an improvement. The run on 4
+October, the first after the change, started 150 minutes late, inside the range
+before it, so one point can't separate the two.
+
+### Holding the email until `deliver_at`
+
+With `deliver_at` set, the run is started earlier on purpose. It writes the
+briefings, then waits until `deliver_at` and sends. A run that finishes late
+sends at once. Either way, the log's `Timing:` line gives the time it was due,
+when it started, how many minutes late that was, how long it waited and when it
+sent.
+
+The log's start is when the script begins, which is about a minute after GitHub
+creates the run, because checkout and installing the dependencies come first.
+`run_history.py` uses the time GitHub created the run, so its lateness reads a
+minute or so lower than the log's. Compare like with like.
+
+A run learns when it was due from the cron entry that started it. The workflow
+passes that entry in as `DIGEST_SCHEDULE`, and the script takes the daily
+occurrence of that time nearest to the start. A run you start by hand has no
+entry, so it has no due time and never waits. Otherwise a manual run in the
+afternoon would sit until the next morning. `deliver_at` is the first time after
+the due time that matches it, in the `timezone` setting. The sums are done in
+UTC, because subtracting two local times in the same zone ignores daylight
+saving. The night clocks go forward is 23 hours long, and a 1:00 AM run waiting
+for 8:00 AM waits 6 hours, not 7.
+
+The window of articles counts back from the due time, not from the real start.
+Starts that wander from day to day then can't leave a gap between two digests,
+and the cost is a small overlap. The window still reaches up to the real start,
+so nothing published before the run began is missed. Anything published after the
+start is left out of that day's email, however long the run then waits.
+
+Waiting is capped at 3 hours (`MAX_HOLD` in `digest.py`). The workflow's
+`timeout-minutes` is 215, which is the longest run (about 29 minutes of slow
+feeds, the full model budget and sending) plus that cap, and a test checks it.
+A run waiting in a private repo uses Actions minutes.
 
 ## How the email looks
 

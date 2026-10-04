@@ -22,6 +22,16 @@ pip install pytest-cov
 python -m pytest --cov=digest --cov-branch --cov-report=term-missing
 ```
 
+## Checking the schedule
+
+`python run_history.py` reads GitHub's public run history and prints how late
+each scheduled run started, how long it took and when it finished, with a
+summary. It needs no token. After changing the schedule, run it with
+`--cron`, `--tz` and `--from` for the new entry and compare the summary with the
+one before. [When the email
+arrives](HOW-IT-WORKS.md#when-the-email-arrives) explains why the start is also
+shown in UTC.
+
 ## Before changing the email
 
 Some mistakes in the email code don't raise an error. The email still sends,
