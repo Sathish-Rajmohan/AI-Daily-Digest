@@ -9,7 +9,13 @@ on:
     # HOW-IT-WORKS.md, "When the email arrives".
     - cron: "17 8 * * *"
       timezone: "Australia/Sydney"
-  workflow_dispatch: {}   # manual run from the Actions tab
+  workflow_dispatch:      # manual run from the Actions tab
+    inputs:
+      amp_variant:
+        description: "Gmail folding test. Leave on default for a normal email."
+        type: choice
+        default: default
+        options: [default, animate, bind, single]
 
 jobs:
   send-digest:
@@ -47,4 +53,7 @@ jobs:
           # Only needed if the schedule's own timezone differs from the one in
           # topics.json, such as a UTC cron entry with no timezone key.
           # DIGEST_SCHEDULE_TZ: "UTC"
+          # Which way of folding a manual run sends, to try them in Gmail on a
+          # phone. Empty on scheduled runs, which send the normal email.
+          DIGEST_AMP_VARIANT: ${{ inputs.amp_variant }}
         run: python digest.py

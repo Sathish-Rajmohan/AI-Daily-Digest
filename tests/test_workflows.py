@@ -24,7 +24,7 @@ WORKFLOWS = ROOT / ".github" / "workflows"
 # Every environment variable digest.py reads, split by who sets it.
 SECRETS = {"GEMINI_API_KEY", "GROQ_API_KEY", "GMAIL_ADDRESS", "GMAIL_APP_PASSWORD", "RECIPIENT_EMAIL"}
 OPTIONAL_OVERRIDES = {"GEMINI_MODELS", "GEMINI_MODEL", "GROQ_MODELS", "DIGEST_CONFIG_PATH",
-                      "DIGEST_SCHEDULE_TZ"}
+                      "DIGEST_SCHEDULE_TZ", "DIGEST_AMP_VARIANT"}
 # How the script learns which trigger started it. Actions sets the first, and
 # the workflow passes the second.
 RUN_CONTEXT = {"GITHUB_EVENT_NAME", "DIGEST_SCHEDULE"}
@@ -131,9 +131,18 @@ def test_every_environment_variable_the_script_reads_is_accounted_for():
 
 def test_every_secret_reaches_the_script_under_its_own_name(digest_workflow):
     env = run_step(digest_workflow)["env"]
-    assert set(env) == SECRETS | {"DIGEST_SCHEDULE"}
+    assert set(env) == SECRETS | {"DIGEST_SCHEDULE", "DIGEST_AMP_VARIANT"}
     for name in SECRETS:
         assert env[name].replace(" ", "") == "${{secrets.%s}}" % name
+
+
+def test_the_manual_run_menu_offers_exactly_the_folding_versions_the_script_has(digest_workflow):
+    menu = digest_workflow["on"]["workflow_dispatch"]["inputs"]["amp_variant"]
+    assert menu["type"] == "choice"
+    assert menu["default"] == "default"
+    assert menu["options"] == ["default", *(v for v in digest.AMP_VARIANTS if v != digest.DEFAULT_AMP_VARIANT)]
+    env = run_step(digest_workflow)["env"]
+    assert env["DIGEST_AMP_VARIANT"].replace(" ", "") == "${{inputs.amp_variant}}"
 
 
 # Without this the script can't tell when a scheduled run was due, so it

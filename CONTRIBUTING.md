@@ -39,7 +39,13 @@ but part of it stops working.
 
 - Gmail falls back to the regular email if the AMP version breaks any AMP rule.
   After changing `build_amp()`, save a generated copy to a file and run
-  `npx amphtml-validator --html_format AMP4EMAIL <file>`.
+  `npx amphtml-validator --html_format AMP4EMAIL <file>`. `build_amp()` has
+  more than one version (`AMP_VARIANTS`), and
+  `VALIDATE_AMP=1 python -m pytest tests/test_amp_validator.py` runs the
+  validator on each. It needs Node and a network, so it's skipped otherwise.
+- A manual run can send one of the other versions to try in Gmail. Pick it from
+  the **Run workflow** menu, which sets `DIGEST_AMP_VARIANT`. Scheduled runs
+  always send the normal one, and the subject of a test email names the version.
 - Font names in `_FONT_STACK` and `_SERIF_STACK` need single quotes. The stacks
   go inside double-quoted `style` attributes, where a double quote ends the
   attribute and the font is dropped for the whole email.

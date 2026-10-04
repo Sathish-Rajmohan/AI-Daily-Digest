@@ -164,10 +164,11 @@ def test_each_topic_gets_its_own_accordion():
     assert out.count('<amp-accordion class="stories">') == 2
 
 
-# amp-accordion's docs list these attributes, but the AMP4EMAIL validator
-# rejects them.
+# The shipped accordion has no extra attributes. The validator rejects
+# disable-session-states in an email, so no version uses it. animate is only
+# in the "animate" version, which is there to be tried.
 @pytest.mark.parametrize("attribute", ["disable-session-states", "expand-single-section", "animate"])
-def test_attributes_the_email_validator_rejects_are_not_used(attribute):
+def test_the_shipped_accordion_has_no_extra_attributes(attribute):
     out = digest.build_amp([("Tech", brief(), None)], DATE)
     accordion_tags = re.findall(r"<amp-accordion[^>]*>", out)
     assert accordion_tags and not any(attribute in tag for tag in accordion_tags)
@@ -347,3 +348,182 @@ def test_a_full_size_digest_stays_under_amps_document_limit():
     results = [(f"Topic {i}", heavy, None) for i in range(5)]
     out = digest.build_amp(results, DATE, FACT)
     assert len(out.encode("utf-8")) < digest.AMP_MAX_BYTES
+
+
+# --------------------------------------------------------------------------
+# Other ways of folding, for trying in Gmail on iPhone
+# --------------------------------------------------------------------------
+#
+# The shipped version is "accordion". The others are only sent when
+# DIGEST_AMP_VARIANT asks for one. These tests check what running code can
+# check. Whether Gmail on a phone holds its place is for a person to find out.
+
+def mixed_results():
+    degraded = digest.headlines_only_brief(
+        [{"title": "H1", "link": "https://x.example/1", "source": "S"}], 3)
+    return [("Tech", brief("Tech", 3), None), ("Quiet", {"overview": "Quiet day.", "stories": []}, None),
+            ("World", degraded, None), ("Broken", None, "feeds failed"), ("Sci", brief("Sci", 2), None)]
+
+
+def test_the_default_version_is_the_shipped_accordion():
+    results = mixed_results()
+    assert digest.DEFAULT_AMP_VARIANT == "accordion"
+    assert digest.build_amp(results, DATE, FACT) == digest.build_amp(results, DATE, FACT, "accordion")
+
+
+def test_an_unknown_version_is_refused_rather_than_guessed():
+    with pytest.raises(ValueError, match="sideways"):
+        digest.build_amp(mixed_results(), DATE, FACT, "sideways")
+
+
+@pytest.mark.parametrize("variant", digest.AMP_VARIANTS)
+def test_every_version_is_well_formed_and_has_no_inline_styles(variant):
+    parsed = tree(digest.build_amp(mixed_results(), DATE, FACT, variant))
+    assert parsed.inline_styles == 0
+    assert parsed.errors == [] and parsed.stack == []
+
+
+@pytest.mark.parametrize("variant", digest.AMP_VARIANTS)
+def test_every_version_holds_everything_the_full_email_holds(variant):
+    results = mixed_results()
+    full = digest.build_html(results, DATE, FACT)
+    amp = digest.build_amp(results, DATE, FACT, variant)
+    amp_text = plain(amp)
+
+    for _, b, _ in results:
+        if not b:
+            continue
+        if not b.get("degraded"):
+            assert b["overview"] in amp_text
+        for story in b["stories"]:
+            if not b.get("degraded"):
+                assert story["subheading"] in amp_text
+                for para in story["detail"].split("\n\n"):
+                    assert para in amp_text
+            for s in story["sources"]:
+                assert s["title"] in amp_text and s["outlet"] in amp_text
+    assert {h for h in re.findall(r'href="([^"]+)"', full)} == {h for h, _ in tree(amp).hrefs}
+    for piece in ("A fact.", "A reason.", "Skipped this run: Broken.", DATE):
+        assert piece in amp_text
+
+
+@pytest.mark.parametrize("variant", digest.AMP_VARIANTS)
+def test_no_version_uses_an_attribute_the_email_validator_rejects(variant):
+    out = digest.build_amp(mixed_results(), DATE, FACT, variant)
+    assert "disable-session-states" not in out
+    assert "expand-single-section" not in out
+
+
+@pytest.mark.parametrize("variant", digest.AMP_VARIANTS)
+def test_every_version_stays_under_amps_limit_with_the_shipped_five_topics(variant):
+    long_para = " ".join(["This sentence has about ten words in it, roughly."] * 6)
+    heavy = {
+        "overview": long_para,
+        "stories": [
+            {"subheading": "A subheading of a realistic length for a story",
+             "detail": "\n\n".join([long_para] * 3),
+             "sources": [source(i, title="T" * 90, link="https://news.example/" + "p" * 100)
+                         for i in range(4)]}
+            for _ in range(9)
+        ],
+    }
+    out = digest.build_amp([(f"Topic {i}", heavy, None) for i in range(5)], DATE, FACT, variant)
+    assert len(out.encode("utf-8")) < digest.AMP_MAX_BYTES
+
+
+def test_animate_is_the_shipped_accordion_with_one_attribute_added():
+    results = mixed_results()
+    plain_version = digest.build_amp(results, DATE, FACT, "accordion")
+    animated = digest.build_amp(results, DATE, FACT, "animate")
+    assert animated == plain_version.replace('<amp-accordion class="stories">',
+                                             '<amp-accordion class="stories" animate>')
+    assert animated.count("<amp-accordion") == 2
+
+
+def test_bind_swaps_the_accordion_for_amp_bind():
+    out = digest.build_amp(mixed_results(), DATE, FACT, "bind")
+    assert tree(out).scripts == ["https://cdn.ampproject.org/v0.js",
+                                 "https://cdn.ampproject.org/v0/amp-bind-0.1.js"]
+    assert 'custom-element="amp-bind"' in out
+    assert "amp-accordion" not in out
+    assert not any("expanded" in s["attrs"] for s in tree(out).sections)
+
+
+def test_bind_gives_every_story_its_own_value_and_starts_it_closed():
+    out = digest.build_amp(mixed_results(), DATE, FACT, "bind")
+    sections = tree(out).sections
+    assert len(sections) == 5
+    for n, section in enumerate(sections):
+        assert section["children"] == ["h4", "div"]
+        assert section["attrs"]["[class]"] == f"s{n} ? 'story open' : 'story'"
+    heads = re.findall(r'<h4 class="story-head" role="button" tabindex="0" on="([^"]+)"', out)
+    assert heads == [f"tap:AMP.setState({{s{n}: !s{n}}})" for n in range(5)]
+    bodies = re.findall(r'<div class="story-body" hidden \[hidden\]="([^"]+)">', out)
+    assert bodies == [f"!s{n}" for n in range(5)]
+
+
+def test_bind_marks_an_open_story_with_the_class_the_toggle_styles_read():
+    out = digest.build_amp([("Tech", brief(stories=1), None)], DATE, None, "bind")
+    css = re.search(r"<style amp-custom>(.*?)</style>", out).group(1)
+    assert ".story.open .more { display:none; }" in css
+    assert ".story.open .less { display:inline; }" in css
+    assert "story.open" not in digest.build_amp([("Tech", brief(stories=1), None)], DATE)
+
+
+def test_single_puts_the_whole_email_in_one_accordion():
+    out = digest.build_amp(mixed_results(), DATE, FACT, "single")
+    assert out.count("<amp-accordion") == 1
+    sections = tree(out).sections
+    # 3 + 2 stories, plus a heading section for each of the 4 topics shown.
+    assert len(sections) == 9
+    assert all(s["parent"] == "amp-accordion" for s in sections)
+    assert all(s["children"] == ["h4", "div"] for s in sections)
+
+
+def test_single_keeps_a_topics_overview_in_its_first_section_and_open():
+    out = digest.build_amp([("Tech", brief(stories=2), None)], DATE, FACT, "single")
+    heads = [s for s in tree(out).sections if "topic" in s["attrs"]["class"].split()]
+    assert len(heads) == 1 and "expanded" in heads[0]["attrs"]
+    start = out.index('<section class="topic story ink0" expanded>')
+    end = out.index("</section>", start)
+    assert "Tech overview." in out[start:end]
+    assert re.search(r'<span class="topic-name">Tech</span>', out)
+    # The fact is above the accordion, as in the other versions.
+    assert out.index("A fact.") < out.index("<amp-accordion")
+
+
+def test_single_gives_each_story_its_topics_colour_because_no_wrapper_does():
+    out = digest.build_amp([("A", brief("A", 1), None), ("B", brief("B", 1), None)], DATE, None, "single")
+    classes = [s["attrs"]["class"] for s in tree(out).sections]
+    assert classes == ["topic story ink0", "story ink0", "topic story ink1", "story ink1"]
+    assert '<div class="topic ink' not in out
+
+
+def test_single_hint_only_when_something_can_be_opened():
+    assert "Tap a story" not in digest.build_amp([("Tech", {"overview": "Quiet.", "stories": []}, None)],
+                                                 DATE, None, "single")
+    assert digest.build_amp([("Tech", brief(), None)], DATE, None, "single").count("Tap a story") == 1
+
+
+@pytest.mark.parametrize("variant", digest.AMP_VARIANTS)
+def test_an_empty_digest_has_no_accordion_in_any_version(variant):
+    out = digest.build_amp([("Quiet", None, None)], DATE, None, variant)
+    assert "<amp-accordion" not in out
+    assert "No new stories found in the lookback window." in out
+
+
+@pytest.mark.parametrize("value, expected", [
+    (None, "accordion"), ("", "accordion"), ("  ", "accordion"), ("default", "accordion"),
+    ("bind", "bind"), (" Single ", "single"), ("animate", "animate"), ("accordion", "accordion"),
+])
+def test_the_version_comes_from_the_environment(monkeypatch, value, expected):
+    if value is not None:
+        monkeypatch.setenv("DIGEST_AMP_VARIANT", value)
+    assert digest.amp_variant_from_env() == expected
+
+
+def test_a_misspelt_version_sends_the_normal_one_and_says_so(monkeypatch, capsys):
+    monkeypatch.setenv("DIGEST_AMP_VARIANT", "bnid")
+    assert digest.amp_variant_from_env() == "accordion"
+    err = capsys.readouterr().err
+    assert "bnid" in err and "bind" in err

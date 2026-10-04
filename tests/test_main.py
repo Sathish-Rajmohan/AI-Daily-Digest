@@ -300,7 +300,7 @@ def test_oversized_collapsible_copy_is_dropped_not_sent_broken(write_config, mai
 
 
 # --------------------------------------------------------------------------
-# Turning the Gmail version off alone
+# Turning the Gmail version off alone, and trying other versions of it
 # --------------------------------------------------------------------------
 
 def run_and_collect(write_config, sent, **settings):
@@ -358,6 +358,65 @@ def test_both_off_sends_the_open_email_alone(write_config, mail_env, sent, fake_
     _, body, amp = run_and_collect(write_config, sent, collapsible_stories=False, gmail_folding=False)
     assert amp is None and "<input" not in body
     assert "Gmail folding is off" not in capsys.readouterr().out
+
+
+def test_a_normal_run_sends_the_shipped_version_with_the_normal_subject(write_config, mail_env, sent,
+                                                                         fake_pipeline, monkeypatch):
+    monkeypatch.setenv("DIGEST_AMP_VARIANT", "")
+    subject, _, amp = run_and_collect(write_config, sent)
+    assert "<amp-accordion class=\"stories\">" in amp
+    assert "AMP test" not in subject
+
+
+@pytest.mark.parametrize("variant, marker", [
+    ("bind", 'custom-element="amp-bind"'),
+    ("single", 'class="topic story ink0" expanded'),
+    ("animate", '<amp-accordion class="stories" animate>'),
+])
+def test_a_chosen_version_is_sent_and_named_in_the_subject(write_config, mail_env, sent, fake_pipeline,
+                                                           monkeypatch, capsys, variant, marker):
+    monkeypatch.setenv("DIGEST_AMP_VARIANT", variant)
+    subject, body, amp = run_and_collect(write_config, sent)
+    assert marker in amp
+    assert subject.startswith(f"[AMP test: {variant}] Daily Digest - ")
+    assert f"Testing the '{variant}' AMP version" in capsys.readouterr().out
+    assert 'type="checkbox"' in body
+
+
+def test_a_chosen_version_changes_nothing_but_the_amp_part(write_config, mail_env, sent, fake_pipeline,
+                                                           monkeypatch):
+    _, normal_body, _ = run_and_collect(write_config, sent)
+    sent.clear()
+    sent.amp.clear()
+    monkeypatch.setenv("DIGEST_AMP_VARIANT", "bind")
+    _, test_body, _ = run_and_collect(write_config, sent)
+    assert test_body == normal_body
+
+
+def test_a_misspelt_version_still_sends_the_normal_digest(write_config, mail_env, sent, fake_pipeline,
+                                                          monkeypatch, capsys):
+    monkeypatch.setenv("DIGEST_AMP_VARIANT", "bnid")
+    subject, _, amp = run_and_collect(write_config, sent)
+    assert "<amp-accordion" in amp
+    assert "AMP test" not in subject
+    assert "unknown DIGEST_AMP_VARIANT" in capsys.readouterr().err
+
+
+def test_a_chosen_version_is_ignored_when_gmail_folding_is_off(write_config, mail_env, sent, fake_pipeline,
+                                                               monkeypatch):
+    monkeypatch.setenv("DIGEST_AMP_VARIANT", "bind")
+    subject, _, amp = run_and_collect(write_config, sent, gmail_folding=False)
+    assert amp is None
+    assert "AMP test" not in subject
+
+
+def test_an_oversized_test_version_is_dropped_and_the_subject_stays_plain(write_config, mail_env, sent,
+                                                                           fake_pipeline, monkeypatch):
+    monkeypatch.setattr(digest, "AMP_MAX_BYTES", 100)
+    monkeypatch.setenv("DIGEST_AMP_VARIANT", "bind")
+    subject, _, amp = run_and_collect(write_config, sent)
+    assert amp is None
+    assert "AMP test" not in subject
 
 
 def test_send_failure_exits_non_zero(write_config, mail_env, fake_pipeline, monkeypatch, capsys):

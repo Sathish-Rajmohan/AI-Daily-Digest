@@ -1729,6 +1729,38 @@ body {{ margin:0; padding:0; background:{_PAGE_BG}; font-family:{_FONT_STACK}; c
 """ + _amp_ink_css()
 
 
+# Ways to fold a story, for finding out which one Gmail on iPhone handles
+# without jumping to the top. "accordion" is what ships. The others are
+# only sent when DIGEST_AMP_VARIANT asks for one.
+#   animate  the same accordion with its open and close animation turned on
+#   bind     amp-bind in place of amp-accordion
+#   single   one accordion for the whole email, so each topic's name and
+#            overview become its first section
+AMP_VARIANTS = ("accordion", "animate", "bind", "single")
+DEFAULT_AMP_VARIANT = "accordion"
+
+_AMP_TOGGLE = (
+    '<span class="toggle" aria-hidden="true">'
+    '<span class="more">+</span><span class="less">&#8722;</span></span>'
+)
+
+# The extra rules each version needs. amp-accordion sets its headings to
+# display:block, which the stylesheet's flex row doesn't survive, so the bind
+# version does the same to look alike. amp-bind marks an open story with a
+# class in place of the expanded attribute.
+_AMP_VARIANT_CSS = {
+    "bind": (
+        ".story > .story-head { display:block; }\n"
+        ".story.open .more { display:none; }\n"
+        ".story.open .less { display:inline; }\n"
+    ),
+    "single": (
+        ".topic.story > .story-head { padding-top:0; }\n"
+        ".topic.story .topic-meta { display:block; font-weight:400; }\n"
+    ),
+}
+
+
 def _amp_paragraphs(text, css_class):
     parts = [p.strip() for p in re.split(r"\n\s*\n", text or "") if p.strip()]
     return "".join(f'<p class="{css_class}">{html.escape(p)}</p>' for p in parts)
@@ -1796,15 +1828,58 @@ def _story_label(story):
     return first or "More on this topic"
 
 
-def build_amp(topic_results, date_str, fact=None):
+def _amp_story(story, variant, position, ink_class=""):
+    """One story that folds under its subheading. `position` numbers the story
+    for the amp-bind version, which keeps one open-or-closed value for each.
+    """
+    body = _amp_paragraphs(story.get("detail"), "para") + _amp_sources(story.get("sources"), None)
+    if not body:
+        body = '<p class="para">No further detail.</p>'
+    head = f"<span>{html.escape(_story_label(story))}</span>{_AMP_TOGGLE}"
+    classes = f"story {ink_class}".strip()
+    if variant == "bind":
+        flag = f"s{position}"
+        return (
+            f'<section class="{classes}" [class]="{flag} ? \'{classes} open\' : \'{classes}\'">'
+            f'<h4 class="story-head" role="button" tabindex="0" '
+            f'on="tap:AMP.setState({{{flag}: !{flag}}})">{head}</h4>'
+            f'<div class="story-body" hidden [hidden]="!{flag}">{body}</div>'
+            "</section>"
+        )
+    return (
+        f'<section class="{classes}">'
+        f'<h4 class="story-head">{head}</h4>'
+        f'<div class="story-body">{body}</div>'
+        "</section>"
+    )
+
+
+def _amp_topic_head(topic_name, brief, inner, ink_class):
+    """A topic's name and overview as the first section of the one accordion.
+    It starts open, so the overview shows until the reader folds it.
+    """
+    return (
+        f'<section class="topic story {ink_class}" expanded>'
+        '<h4 class="story-head">'
+        f'<span class="topic-name">{html.escape(topic_name)}</span>{_AMP_TOGGLE}'
+        f'<span class="topic-meta">{html.escape(_topic_meta(brief))}</span></h4>'
+        f'<div class="story-body topic-body">{inner}</div>'
+        "</section>"
+    )
+
+
+def build_amp(topic_results, date_str, fact=None, variant=DEFAULT_AMP_VARIANT):
     """The AMP version of the email, with the same content as build_html().
     Each story's text and sources fold under its subheading. Overviews and the
-    fact stay open.
+    fact stay open, except in the "single" version, where an overview folds
+    like a story.
     """
+    if variant not in AMP_VARIANTS:
+        raise ValueError(f"unknown AMP variant {variant!r}")
     summary = _digest_summary(topic_results, fact, collapsible=True)
     sections = []
     failed_topics = []
-    has_accordion = False
+    stories_seen = 0
 
     for index, (topic_name, brief, note) in enumerate(topic_results):
         if note:
@@ -1812,6 +1887,8 @@ def build_amp(topic_results, date_str, fact=None):
         if not brief:
             continue
 
+        ink_class = f"ink{index % len(_TOPIC_INKS)}"
+        rows = ""
         if brief.get("degraded"):
             # A headline list has nothing to fold.
             inner = (
@@ -1822,25 +1899,23 @@ def build_amp(topic_results, date_str, fact=None):
                 inner += _amp_sources(story.get("sources"), "Stories")
         else:
             inner = _amp_paragraphs(brief.get("overview"), "overview")
-            rows = ""
             for story in brief.get("stories") or []:
-                body = _amp_paragraphs(story.get("detail"), "para") + _amp_sources(story.get("sources"), None)
-                if not body:
-                    body = '<p class="para">No further detail.</p>'
-                rows += (
-                    '<section class="story">'
-                    f'<h4 class="story-head"><span>{html.escape(_story_label(story))}</span>'
-                    '<span class="toggle" aria-hidden="true">'
-                    '<span class="more">+</span><span class="less">&#8722;</span></span></h4>'
-                    f'<div class="story-body">{body}</div>'
-                    "</section>"
-                )
-            if rows:
-                has_accordion = True
-                inner += f'<amp-accordion class="stories">{rows}</amp-accordion>'
+                rows += _amp_story(story, variant, stories_seen, ink_class if variant == "single" else "")
+                stories_seen += 1
+
+        if variant == "single":
+            sections.append(_amp_topic_head(topic_name, brief, inner, ink_class) + rows)
+            continue
+
+        if rows:
+            if variant == "bind":
+                inner += f'<div class="stories">{rows}</div>'
+            else:
+                animate = " animate" if variant == "animate" else ""
+                inner += f'<amp-accordion class="stories"{animate}>{rows}</amp-accordion>'
 
         sections.append(
-            f'<div class="topic ink{index % len(_TOPIC_INKS)}">'
+            f'<div class="topic {ink_class}">'
             f'<div class="topic-name">{html.escape(topic_name)}</div>'
             f'<div class="topic-meta">{html.escape(_topic_meta(brief))}</div>'
             f"{inner}</div>"
@@ -1849,6 +1924,10 @@ def build_amp(topic_results, date_str, fact=None):
     body = "".join(sections) if sections else (
         '<div class="empty">No new stories found in the lookback window.</div>'
     )
+    if variant == "single" and sections:
+        body = f'<amp-accordion class="stories">{body}</amp-accordion>'
+    has_accordion = stories_seen > 0
+    component = "amp-bind" if variant == "bind" else "amp-accordion"
 
     failure_notice = ""
     if failed_topics:
@@ -1879,10 +1958,10 @@ def build_amp(topic_results, date_str, fact=None):
     <head>
       <meta charset="utf-8">
       <script async src="https://cdn.ampproject.org/v0.js"></script>
-      <script async custom-element="amp-accordion"
-        src="https://cdn.ampproject.org/v0/amp-accordion-0.1.js"></script>
+      <script async custom-element="{component}"
+        src="https://cdn.ampproject.org/v0/{component}-0.1.js"></script>
       <style amp4email-boilerplate>body{{visibility:hidden}}</style>
-      <style amp-custom>{_AMP_CSS}{strip_css}</style>
+      <style amp-custom>{_AMP_CSS}{_AMP_VARIANT_CSS.get(variant, "")}{strip_css}</style>
     </head>
     <body>
       <div class="wrap"><div class="card">
@@ -1899,6 +1978,21 @@ def build_amp(topic_results, date_str, fact=None):
     </body>
     </html>
     """)
+
+
+def amp_variant_from_env():
+    """Which way of folding to send, from DIGEST_AMP_VARIANT. Empty or "default"
+    is the normal email. A name that isn't known falls back to it, because a
+    typo mustn't stop the digest.
+    """
+    name = os.environ.get("DIGEST_AMP_VARIANT", "").strip().lower()
+    if name in ("", "default"):
+        return DEFAULT_AMP_VARIANT
+    if name not in AMP_VARIANTS:
+        print(f"  [warn] unknown DIGEST_AMP_VARIANT '{name}', sending the normal AMP version. "
+              f"The choices are {', '.join(AMP_VARIANTS)}.", file=sys.stderr)
+        return DEFAULT_AMP_VARIANT
+    return name
 
 
 def send_email(subject, html_body, amp_body=None):
@@ -2161,7 +2255,8 @@ def main():
     if collapsible and not gmail_folding:
         print("Gmail folding is off, so Gmail shows every story open. Other apps still fold them.")
     if gmail_folding:
-        amp_body = build_amp(topic_results, date_str, fact)
+        variant = amp_variant_from_env()
+        amp_body = build_amp(topic_results, date_str, fact, variant)
         amp_size = len(amp_body.encode("utf-8"))
         print(f"Collapsible version is {amp_size / 1024:.0f}KB (AMP allows {AMP_MAX_BYTES // 1000}KB)")
         if amp_size > AMP_MAX_BYTES:
@@ -2172,6 +2267,10 @@ def main():
                 file=sys.stderr,
             )
             amp_body = None
+        elif variant != DEFAULT_AMP_VARIANT:
+            # A test email says which version it is, so the copies can be told apart.
+            print(f"Testing the '{variant}' AMP version of folding.")
+            subject = f"[AMP test: {variant}] {subject}"
 
     waited = 0
     if deliver:
