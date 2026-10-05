@@ -74,6 +74,28 @@ def status(code, headers=None):
     return FakeResponse(code, {"error": {"code": code}}, headers=headers)
 
 
+def quota_429(*quotas, retry_delay=None, message="Quota exceeded.", headers=None):
+    """A 429 shaped like Google's: a QuotaFailure with one violation per limit
+    that was passed, and optionally a RetryInfo. A quota is (id, value) or
+    (id, value, model)."""
+    details = [{
+        "@type": "type.googleapis.com/google.rpc.QuotaFailure",
+        "violations": [
+            {"quotaMetric": "generativelanguage.googleapis.com/generate_content_free_tier_requests",
+             "quotaId": q[0], "quotaValue": q[1],
+             **({"quotaDimensions": {"model": q[2]}} if len(q) > 2 else {})}
+            for q in quotas
+        ],
+    }] if quotas else []
+    if retry_delay is not None:
+        details.append({"@type": "type.googleapis.com/google.rpc.RetryInfo",
+                        "retryDelay": f"{retry_delay}s"})
+    error = {"code": 429, "message": message, "status": "RESOURCE_EXHAUSTED"}
+    if details:
+        error["details"] = details
+    return FakeResponse(429, {"error": error}, headers=headers)
+
+
 class FakeTransport:
     """
     Replaces requests.post for both providers. Responses are scripted per
@@ -279,6 +301,7 @@ def isolated(monkeypatch):
     monkeypatch.setattr(digest, "_deadline", None)
     digest._unusable_models.clear()
     digest._disabled_providers.clear()
+    digest._logged_once.clear()
     # A test run on Actions would otherwise look like a scheduled run.
     for name in ("GITHUB_EVENT_NAME", "DIGEST_SCHEDULE", "DIGEST_SCHEDULE_TZ"):
         monkeypatch.delenv(name, raising=False)
@@ -303,6 +326,7 @@ def isolated(monkeypatch):
 
     digest._unusable_models.clear()
     digest._disabled_providers.clear()
+    digest._logged_once.clear()
     assert not violations, f"unmocked network access: {violations}"
 
 

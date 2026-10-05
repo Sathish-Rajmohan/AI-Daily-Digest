@@ -389,7 +389,8 @@ dead.
 
 The free rate limit was hit. The script waits and tries again. If you have a
 lot of topics, raise the `time.sleep(2)` between topics in `main()` in
-`digest.py`.
+`digest.py`. A log line starting `429 over` names the limit that was passed,
+such as a per-minute or a per-day one.
 
 ### Gemini returns 401 or 403
 

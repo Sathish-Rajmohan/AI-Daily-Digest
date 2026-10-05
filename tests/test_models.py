@@ -8,7 +8,7 @@ import sys
 import pytest
 
 import digest
-from conftest import ROOT, FakeResponse, gemini_reply, groq_reply, status
+from conftest import ROOT, FakeResponse, gemini_reply, groq_reply, quota_429, status
 
 OK = {"stories": [], "overview": "fine"}
 
@@ -334,6 +334,112 @@ def test_groq_calls_route_through_the_same_retry_logic(transport, with_groq, clo
     transport.script("groq-a", status(503), groq_reply(OK))
     assert json.loads(call("groq", "groq-a")) == OK
     assert clock.sleeps == [4.0]
+
+
+# --------------------------------------------------------------------------
+# What a 429 says (logged, and not yet acted on)
+# --------------------------------------------------------------------------
+
+DAY = "GenerateRequestsPerDayPerProjectPerModel-FreeTier"
+MINUTE = "GenerateRequestsPerMinutePerProjectPerModel-FreeTier"
+
+
+def test_a_per_day_429_logs_the_limit_that_was_passed(transport, no_jitter, capsys):
+    transport.script("gem-a", quota_429((DAY, "20", "gemini-3.6-flash")))
+    assert call() is None
+    err = capsys.readouterr().err
+    assert f"gemini/gem-a: 429 over {DAY} (limit 20, model gemini-3.6-flash)" in err
+
+
+def test_a_429_logs_the_retry_delay_google_suggests(transport, no_jitter, capsys):
+    transport.script("gem-a", quota_429((MINUTE, "5"), retry_delay=27))
+    call()
+    assert f"429 over {MINUTE} (limit 5), Google suggests retrying in 27s" in capsys.readouterr().err
+
+
+def test_a_429_that_names_no_limit_is_logged_as_that(transport, no_jitter, capsys):
+    # What a capacity refusal looks like: "resource exhausted" and no quota.
+    transport.script("gem-a", quota_429(message="Resource has been exhausted"))
+    call()
+    assert "gemini/gem-a: 429 with no limit named in the reply" in capsys.readouterr().err
+
+
+def test_every_limit_a_429_names_is_logged(transport, no_jitter, capsys):
+    transport.script("gem-a", quota_429((MINUTE, "5"), (DAY, "20")))
+    call()
+    err = capsys.readouterr().err
+    assert f"429 over {MINUTE} (limit 5)" in err and f"429 over {DAY} (limit 20)" in err
+
+
+def test_the_same_limit_is_logged_once_per_model_not_once_per_try(transport, no_jitter, capsys):
+    transport.script("gem-a", quota_429((DAY, "20")))
+    call()
+    call()
+    assert capsys.readouterr().err.count(f"429 over {DAY}") == 1
+
+
+def test_another_limit_or_another_model_is_logged_again(transport, no_jitter, capsys):
+    transport.script("gem-a", quota_429((MINUTE, "5")), quota_429((DAY, "20")))
+    transport.script("gem-b", quota_429((MINUTE, "5")))
+    call()
+    call(model="gem-b")
+    err = capsys.readouterr().err
+    assert err.count(f"gemini/gem-a: 429 over {MINUTE}") == 1
+    assert err.count(f"gemini/gem-a: 429 over {DAY}") == 1
+    assert err.count(f"gemini/gem-b: 429 over {MINUTE}") == 1
+
+
+def test_the_log_carries_neither_the_key_nor_the_prompt(transport, no_jitter, capsys):
+    leaky = "key gemini-test-key prompt SECRET-ARTICLE-TEXT"
+    transport.script("gem-a", quota_429((DAY, "20"), message=leaky), quota_429(message=leaky))
+    digest._call_model("gemini", "gem-a", "SECRET-ARTICLE-TEXT", "Topic", "system", digest.BRIEF_SCHEMA)
+    captured = capsys.readouterr()
+    assert "gemini-test-key" not in captured.out + captured.err
+    assert "SECRET-ARTICLE-TEXT" not in captured.out + captured.err
+
+
+@pytest.mark.parametrize("response", [
+    FakeResponse(429, None, text="<html>Too many requests</html>"),
+    FakeResponse(429, []),
+    FakeResponse(429, {"error": "plain string"}),
+    FakeResponse(429, {"error": {"details": "not a list"}}),
+    FakeResponse(429, {"error": {"details": [None, "x", {"@type": "QuotaFailure", "violations": "no"}]}}),
+    FakeResponse(429, {"error": {"details": [{"@type": "x.RetryInfo", "retryDelay": "soon"}]}}),
+])
+def test_an_unreadable_429_body_is_logged_as_naming_no_limit(transport, no_jitter, capsys, response):
+    transport.script("gem-a", response)
+    assert call() is None
+    assert "429 with no limit named in the reply" in capsys.readouterr().err
+
+
+def test_logging_the_limit_does_not_change_how_a_429_is_retried(transport, clock, no_jitter):
+    transport.script("gem-a", quota_429((DAY, "20")))
+    assert call() is None
+    assert len(transport.calls) == digest.ATTEMPTS_PER_MODEL
+    assert clock.sleeps == [4.0, 8.0]
+
+
+def test_an_alias_that_is_served_by_another_model_says_so_once(transport, capsys):
+    reply = gemini_reply(OK)
+    reply._payload["modelVersion"] = "gemini-3.8-flash"
+    transport.script("gem-a", reply)
+    call()
+    call()
+    assert capsys.readouterr().out.count("gemini/gem-a was answered by gemini-3.8-flash") == 1
+
+
+def test_a_model_that_answers_as_itself_adds_no_line(transport, capsys):
+    reply = gemini_reply(OK)
+    reply._payload["modelVersion"] = "gem-a"
+    transport.script("gem-a", reply)
+    call()
+    assert "was answered by" not in capsys.readouterr().out
+
+
+def test_a_reply_with_no_model_version_adds_no_line(transport, capsys):
+    transport.script("gem-a", gemini_reply(OK))
+    call()
+    assert "was answered by" not in capsys.readouterr().out
 
 
 # --------------------------------------------------------------------------

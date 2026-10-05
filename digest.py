@@ -588,6 +588,85 @@ def _retry_after(resp):
         return None
 
 
+def _quotas_from_429(resp):
+    """The limits a 429 body says were passed, as [{id, value, model}], and the
+    retry delay it suggests in seconds (or None).
+
+    Google lists them in error.details, as a QuotaFailure with one violation per
+    limit and a RetryInfo with the delay. The list is empty when the body isn't
+    JSON or names no limit, which is what a capacity 429 looks like. The
+    message text is never read, so nothing from the request can end up in the
+    log.
+    """
+    try:
+        details = resp.json()["error"]["details"]
+    except (ValueError, KeyError, TypeError, AttributeError):
+        return [], None
+    if not isinstance(details, list):
+        return [], None
+
+    quotas, delay = [], None
+    for item in details:
+        if not isinstance(item, dict):
+            continue
+        kind = str(item.get("@type", ""))
+        if kind.endswith("QuotaFailure"):
+            for violation in item.get("violations") or []:
+                if isinstance(violation, dict) and violation.get("quotaId"):
+                    dimensions = violation.get("quotaDimensions")
+                    quotas.append({
+                        "id": str(violation["quotaId"])[:120],
+                        "value": str(violation.get("quotaValue", "?"))[:20],
+                        "model": str(dimensions.get("model", ""))[:60]
+                        if isinstance(dimensions, dict) else "",
+                    })
+        elif kind.endswith("RetryInfo"):
+            try:
+                delay = float(str(item.get("retryDelay", "")).rstrip("s"))
+            except ValueError:
+                pass
+    return quotas, delay
+
+
+# Which 429 limits and which served models have been logged this run. Each is
+# logged once, so five topics hitting the same limit leave one line.
+_logged_once = set()
+
+
+def _log_429(label, resp):
+    """Say which limit a 429 was about. The Actions log used to keep only the
+    status code, so there was no telling a per-minute limit from a per-day one
+    or from a model that was simply busy.
+    """
+    quotas, delay = _quotas_from_429(resp)
+    key = ("429", label, tuple((q["id"], q["value"]) for q in quotas))
+    if key in _logged_once:
+        return
+    _logged_once.add(key)
+    if not quotas:
+        print(f"  [info] {label}: 429 with no limit named in the reply", file=sys.stderr)
+        return
+    for q in quotas:
+        served = f", model {q['model']}" if q["model"] else ""
+        retry = f", Google suggests retrying in {delay:.0f}s" if delay is not None else ""
+        print(f"  [info] {label}: 429 over {q['id']} (limit {q['value']}{served}){retry}",
+              file=sys.stderr)
+
+
+def _log_served_model(label, data):
+    """Gemini's reply names the model that really answered. For an alias such as
+    gemini-flash-latest that shows where it points today, and so which
+    allowance the call used.
+    """
+    served = data.get("modelVersion")
+    if not isinstance(served, str) or not served or served == label.split("/", 1)[1]:
+        return
+    key = ("served", label, served)
+    if key not in _logged_once:
+        _logged_once.add(key)
+        print(f"  [info] {label} was answered by {served[:60]}")
+
+
 def _gemini_request(model, prompt, system, schema):
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
     headers = {
@@ -722,6 +801,8 @@ def _call_model(provider, model, prompt, topic_name, system, schema):
             if not isinstance(data, dict):
                 print(f"  [warn] {label}: 200 with an unrecognized body: {resp.text[:200]}", file=sys.stderr)
                 return None
+            if provider == "gemini":
+                _log_served_model(label, data)
             return spec["extract"](data, topic_name)
 
         if code in (400, 404):
@@ -740,6 +821,8 @@ def _call_model(provider, model, prompt, topic_name, system, schema):
             return None
 
         if code in (429, 500, 502, 503, 504):
+            if code == 429:
+                _log_429(label, resp)
             if attempt == ATTEMPTS_PER_MODEL:
                 print(f"  [warn] {label}: {code} on the last attempt, moving on", file=sys.stderr)
                 return None

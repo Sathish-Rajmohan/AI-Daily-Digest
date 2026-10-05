@@ -115,6 +115,13 @@ Other failures:
   rest of the run.
 - A 404 means the model name is wrong, and that model is skipped after one try.
 - A `Retry-After` header is followed, up to 60 seconds.
+- A 429 means a limit was passed, or the model is busy. The log says which: a
+  line such as `429 over GenerateRequestsPerDayPerProjectPerModel-FreeTier
+  (limit 20)` names the limit, and `429 with no limit named in the reply` means
+  Google gave none. Each one is logged once per model, and nothing from the
+  request is in it. A 429 is still retried the same way as a 503 for now.
+- When the model name is an alias such as `gemini-flash-latest`, the log says
+  once which model answered, so you can see which allowance the call used.
 - A reply that cuts off partway through its JSON is thrown away and the next
   model is asked.
 - If no model answers, each topic lists its latest headlines and the email
