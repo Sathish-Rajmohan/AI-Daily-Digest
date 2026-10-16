@@ -8,7 +8,9 @@ email is on. A channel that fails doesn't stop the others.
 
 import os
 import sys
+from urllib.parse import urlsplit
 
+from digestlib.channels.discord import send_discord
 from digestlib.channels.email import send_email
 from digestlib.channels.telegram import send_telegram
 
@@ -31,6 +33,12 @@ CHANNELS = {
         "secrets": ("TELEGRAM_BOT_TOKEN",),
         "html": False,
         "send": lambda message, channel: send_telegram(message, channel.get("story_text", False)),
+    },
+    "discord": {
+        "needs": ("DISCORD_WEBHOOK_URL",),
+        "secrets": ("DISCORD_WEBHOOK_URL",),
+        "html": False,
+        "send": lambda message, channel: send_discord(message, channel.get("story_text", False)),
     },
 }
 
@@ -68,8 +76,15 @@ def hide_secrets(text):
     for spec in CHANNELS.values():
         for name in spec["secrets"]:
             value = os.environ.get(name, "").strip()
-            if value:
-                text = text.replace(value, f"[{name}]")
+            if not value:
+                continue
+            text = text.replace(value, f"[{name}]")
+            # A connection error can quote just the path, and a webhook's
+            # path holds its token.
+            if value.startswith(("http://", "https://")):
+                path = urlsplit(value).path
+                if len(path) > 1:
+                    text = text.replace(path, f"[{name} path]")
     return text
 
 
