@@ -54,7 +54,7 @@ FEED_FETCH_WORKERS = 8
 socket.setdefaulttimeout(FEED_FETCH_TIMEOUT)
 
 USER_AGENT = (
-    "daily-digest/1.0 (+https://github.com/Sathish-Rajmohan/AI-Daily-News-Digest; "
+    "daily-digest/1.0 (+https://github.com/Sathish-Rajmohan/AI-Daily-Digest; "
     "RSS reader for personal digest)"
 )
 
