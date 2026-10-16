@@ -30,7 +30,13 @@ import feedparser
 import requests
 from dateutil import parser as dateparser
 
-CONFIG_PATH = os.environ.get("DIGEST_CONFIG_PATH", "topics.json")
+# The code lives in digestlib/. digest.py runs it, and keeps the names that
+# the tests and run_history.py read as digest.X.
+from digestlib.config import CONFIG_PATH, WEEKDAYS, load_config
+from digestlib.schedule import (
+    MAX_HOLD, _hold_until, _local_time_on, _local_zone, _minutes, _stamp, delivery_time,
+    scheduled_start,
+)
 
 # Where each run keeps a copy of what it sent, for the weekly edition. The
 # workflow uploads this folder as an artifact.
@@ -62,109 +68,6 @@ USER_AGENT = (
     "daily-digest/1.0 (+https://github.com/Sathish-Rajmohan/AI-Daily-Digest; "
     "RSS reader for personal digest)"
 )
-
-# Longest a finished run waits for deliver_at. Waiting uses Actions minutes, so
-# it's capped, and the workflow's timeout has to cover it on top of a
-# worst-case run.
-MAX_HOLD = 180 * 60
-
-DELIVER_AT = re.compile(r"([01]?\d|2[0-3]):([0-5]\d)")
-
-WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
-
-
-def load_config():
-    with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-        config = json.load(f)
-    if not isinstance(config, dict) or not isinstance(config.get("topics"), list):
-        raise ValueError(f"{CONFIG_PATH} must contain a 'topics' array")
-    for index, topic in enumerate(config["topics"], start=1):
-        _check_topic(topic, index)
-    _check_settings(config.get("settings"))
-    _check_weekly(config.get("weekly"))
-    return config
-
-
-# Catch mistakes in topics.json early. A feeds value written as a string, for
-# example, would be read one character at a time and the topic would report
-# no articles.
-
-def _check_topic(topic, index):
-    if not isinstance(topic, dict):
-        raise ValueError(
-            f"{CONFIG_PATH}: topic {index} must be an object with a name and a feeds list"
-        )
-
-    where = f"topic {index}"
-    name = topic.get("name")
-    if name is not None:
-        if not isinstance(name, str):
-            raise ValueError(f"{CONFIG_PATH}: {where} 'name' must be text")
-        where = f"topic {index} ({name!r})"
-
-    feeds = topic.get("feeds", [])
-    if not isinstance(feeds, list) or not all(isinstance(url, str) for url in feeds):
-        raise ValueError(f"{CONFIG_PATH}: {where} 'feeds' must be a list of feed URLs")
-
-    max_stories = topic.get("max_stories", 5)
-    if isinstance(max_stories, bool) or not isinstance(max_stories, int) or max_stories < 1:
-        raise ValueError(f"{CONFIG_PATH}: {where} 'max_stories' must be a whole number of 1 or more")
-
-
-def _check_settings(settings):
-    if settings is None:
-        return
-    if not isinstance(settings, dict):
-        raise ValueError(f"{CONFIG_PATH}: 'settings' must be an object")
-
-    lookback = settings.get("lookback_hours", 24)
-    if isinstance(lookback, bool) or not isinstance(lookback, (int, float)) or lookback <= 0:
-        raise ValueError(f"{CONFIG_PATH}: 'lookback_hours' must be a number above 0")
-
-    for key in ("fact_of_the_day", "collapsible_stories"):
-        if not isinstance(settings.get(key, True), bool):
-            raise ValueError(f"{CONFIG_PATH}: '{key}' must be true or false")
-
-    for key in ("email_subject_prefix", "timezone"):
-        if key in settings and not isinstance(settings[key], str):
-            raise ValueError(f"{CONFIG_PATH}: '{key}' must be text")
-
-    deliver_at = settings.get("deliver_at")
-    if deliver_at is not None and not (
-        isinstance(deliver_at, str) and DELIVER_AT.fullmatch(deliver_at)
-    ):
-        raise ValueError(f"{CONFIG_PATH}: 'deliver_at' must be a 24-hour time such as \"08:00\"")
-
-
-def _check_weekly(weekly):
-    """The "weekly" block turns on the weekly edition. It's optional, and the
-    edition is off without it.
-    """
-    if weekly is None:
-        return
-    if not isinstance(weekly, dict):
-        raise ValueError(f"{CONFIG_PATH}: 'weekly' must be an object")
-
-    for key in ("enabled", "skip_daily"):
-        if not isinstance(weekly.get(key, False), bool):
-            raise ValueError(f"{CONFIG_PATH}: 'weekly.{key}' must be true or false")
-
-    day = weekly.get("day", "Sunday")
-    if not (isinstance(day, str) and day.strip().title() in WEEKDAYS):
-        raise ValueError(f"{CONFIG_PATH}: 'weekly.day' must be a day of the week, such as \"Sunday\"")
-
-    deliver_at = weekly.get("deliver_at")
-    if deliver_at is not None and not (
-        isinstance(deliver_at, str) and DELIVER_AT.fullmatch(deliver_at)
-    ):
-        raise ValueError(f"{CONFIG_PATH}: 'weekly.deliver_at' must be a 24-hour time such as \"09:00\"")
-
-    max_threads = weekly.get("max_threads", 3)
-    if isinstance(max_threads, bool) or not isinstance(max_threads, int) or max_threads < 1:
-        raise ValueError(f"{CONFIG_PATH}: 'weekly.max_threads' must be a whole number of 1 or more")
-
-    if "email_subject_prefix" in weekly and not isinstance(weekly["email_subject_prefix"], str):
-        raise ValueError(f"{CONFIG_PATH}: 'weekly.email_subject_prefix' must be text")
 
 
 def parse_entry_time(entry):
@@ -2158,56 +2061,6 @@ def send_email(subject, html_body, amp_body=None):
         server.sendmail(sender, [recipient], msg.as_string())
 
 
-# When a run was meant to start, and when it should send. Scheduled runs are
-# set off by a cron entry that GitHub starts late, so these work out the time
-# the entry was due from the entry itself. A manual run has no such time.
-
-def _local_time_on(day, hour, minute, tz):
-    """That clock time on that date in tz, as UTC. The conversion has to come
-    first, because subtracting two datetimes that share one ZoneInfo ignores
-    daylight saving.
-    """
-    return datetime(day.year, day.month, day.day, hour, minute, tzinfo=tz).astimezone(timezone.utc)
-
-
-def scheduled_start(cron, tz, now):
-    """When the cron entry that started this run was due, in UTC. This is the
-    daily occurrence nearest to `now`, so a start a few seconds early still
-    counts as today's. None unless the entry is a plain daily time like
-    "0 8 * * *".
-    """
-    fields = (cron or "").split()
-    if len(fields) != 5 or fields[2:] != ["*", "*", "*"]:
-        return None
-    if not (fields[0].isdigit() and fields[1].isdigit()):
-        return None
-    minute, hour = int(fields[0]), int(fields[1])
-    if minute > 59 or hour > 23:
-        return None
-    now = now.astimezone(timezone.utc)
-    today = now.astimezone(tz).date()
-    due = [_local_time_on(today + timedelta(days=d), hour, minute, tz) for d in (-1, 0, 1)]
-    return min(due, key=lambda t: abs(t - now))
-
-
-def delivery_time(deliver_at, scheduled, tz):
-    """The first deliver_at ("HH:MM" in tz) at or after the scheduled start, in UTC."""
-    hour, minute = (int(part) for part in deliver_at.split(":"))
-    day = scheduled.astimezone(tz).date()
-    due = _local_time_on(day, hour, minute, tz)
-    if due < scheduled:
-        due = _local_time_on(day + timedelta(days=1), hour, minute, tz)
-    return due
-
-
-def _minutes(delta):
-    return round(delta.total_seconds() / 60)
-
-
-def _stamp(moment, tz):
-    return moment.astimezone(tz).strftime("%a %d %b %H:%M %Z")
-
-
 # Raised when a later change to the saved file would break a reader of the
 # older ones.
 SAVED_DIGEST_VERSION = 1
@@ -2305,16 +2158,6 @@ def _check_environment():
         sys.exit(1)
 
 
-def _local_zone(settings):
-    """The time zone from settings, and whether it was known. UTC if it wasn't."""
-    name = settings.get("timezone", "Australia/Sydney")
-    try:
-        return ZoneInfo(name), True
-    except Exception:
-        print(f"  [warn] unknown timezone '{name}', falling back to UTC", file=sys.stderr)
-        return timezone.utc, False
-
-
 def _amp_copy(topic_results, date_str, fact, edition=DAILY, notices=()):
     """The collapsible AMP copy, or None if it's over AMP's size limit."""
     amp_body = build_amp(topic_results, date_str, fact, edition, notices)
@@ -2329,21 +2172,6 @@ def _amp_copy(topic_results, date_str, fact, edition=DAILY, notices=()):
         )
         return None
     return amp_body
-
-
-def _hold_until(deliver, local_tz):
-    """Wait until `deliver`, for at most MAX_HOLD. Returns the seconds waited."""
-    left = (deliver - datetime.now(timezone.utc)).total_seconds()
-    if left <= 0:
-        print(f"Ready {_minutes(timedelta(seconds=-left))} min after deliver_at. Sending now.")
-        return 0
-    wait = min(left, MAX_HOLD)
-    if wait < left:
-        print(f"  [warn] deliver_at is {left / 60:.0f} min away, past the {MAX_HOLD // 60} min "
-              "hold limit, so this run only waits that long.", file=sys.stderr)
-    print(f"Ready early. Holding {wait / 60:.0f} min until {_stamp(deliver, local_tz)}.")
-    time.sleep(wait)
-    return wait
 
 
 def main():

@@ -22,6 +22,29 @@ REAL_PARSE = feedparser.parse
 
 
 # --------------------------------------------------------------------------
+# Patching digest
+# --------------------------------------------------------------------------
+
+class _PatchEverywhere(types.ModuleType):
+    """digest.py re-exports names from the digestlib modules, so a name set on
+    digest alone wouldn't reach the code that reads it. Setting one here sets
+    it in every digestlib module that has it as well, as one file used to.
+    """
+
+    def __setattr__(self, name, value):
+        reached = False
+        for module in list(sys.modules.values()):
+            if getattr(module, "__name__", "").startswith("digestlib.") and name in vars(module):
+                setattr(module, name, value)
+                reached = True
+        if name in vars(self) or not reached:
+            super().__setattr__(name, value)
+
+
+digest.__class__ = _PatchEverywhere
+
+
+# --------------------------------------------------------------------------
 # Clock
 # --------------------------------------------------------------------------
 

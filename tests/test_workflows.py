@@ -21,6 +21,12 @@ from conftest import ROOT
 
 WORKFLOWS = ROOT / ".github" / "workflows"
 
+
+def script_source():
+    """digest.py and the digestlib modules it runs, as one text."""
+    paths = [ROOT / "digest.py", *sorted((ROOT / "digestlib").rglob("*.py"))]
+    return "\n".join(path.read_text(encoding="utf-8") for path in paths)
+
 # Every environment variable digest.py reads, split by who sets it.
 SECRETS = {"GEMINI_API_KEY", "GROQ_API_KEY", "GMAIL_ADDRESS", "GMAIL_APP_PASSWORD", "RECIPIENT_EMAIL"}
 OPTIONAL_OVERRIDES = {"GEMINI_MODELS", "GEMINI_MODEL", "GROQ_MODELS", "DIGEST_CONFIG_PATH",
@@ -129,7 +135,7 @@ def test_workflow_python_is_new_enough_for_the_script(digest_workflow):
 
 
 def test_every_environment_variable_the_script_reads_is_accounted_for():
-    source = (ROOT / "digest.py").read_text(encoding="utf-8")
+    source = script_source()
     read = set(re.findall(r'os\.environ(?:\.get\(\s*|\[)"([A-Z_]+)"', source))
     assert read == SECRETS | OPTIONAL_OVERRIDES | RUN_CONTEXT
 
@@ -318,9 +324,9 @@ def test_runtime_dependencies_are_pinned_and_cover_every_third_party_import():
         name, _, version = line.partition("==")
         assert version, f"{line} isn't pinned to an exact version"
         pinned[name.lower()] = version
-    source = (ROOT / "digest.py").read_text(encoding="utf-8")
+    source = script_source()
     imported = set(re.findall(r"^(?:import|from) ([A-Za-z_]+)", source, re.M))
-    third_party = {m for m in imported if m not in sys.stdlib_module_names}
+    third_party = {m for m in imported if m not in sys.stdlib_module_names and m != "digestlib"}
     distribution = {"dateutil": "python-dateutil"}
     assert third_party, "expected some third-party imports"
     for module in third_party:
