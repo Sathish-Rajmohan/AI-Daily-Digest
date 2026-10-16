@@ -134,6 +134,8 @@ def _check_channels(channels, weekly):
         if not (isinstance(editions, list) and editions and all(e in EDITIONS for e in editions)):
             raise ValueError(f"{CONFIG_PATH}: the '{kind}' channel's 'editions' must list "
                              '"daily", "weekly" or both')
+        if not isinstance(channel.get("story_text", False), bool):
+            raise ValueError(f"{CONFIG_PATH}: the '{kind}' channel's 'story_text' must be true or false")
 
     # The daily runs save what the weekly edition is written from, so the
     # daily edition always needs somewhere to go.
