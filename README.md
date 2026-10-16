@@ -9,6 +9,10 @@ day and its main stories, each with links to the articles it came from. When
 several outlets cover the same event, their articles become one story. In most
 mail apps a story shows as a single line that you tap to open.
 
+On Sundays a second email reviews the week. It follows the stories that ran
+over several days and lists the rest in a line each. It is written from that
+week's daily emails, so it needs no extra setup.
+
 It runs on free tiers:
 
 | Piece | What it does | Cost |
@@ -126,7 +130,7 @@ GitHub switches off the workflows in a new fork until you turn them on.
    enable them**.
 2. In the list on the left, click **Daily News Digest**. If a banner says the
    scheduled workflow is disabled, click **Enable workflow**. Do the same for
-   **Keepalive**.
+   **Keepalive** and **Weekly News Digest**.
 3. On **Daily News Digest**, click **Run workflow**, then the green **Run
    workflow** button that appears.
 4. The run takes a few minutes. When it finishes, click it, click
@@ -137,6 +141,10 @@ GitHub switches off the workflows in a new fork until you turn them on.
 
 After that, a digest is sent every morning. It will usually arrive some time
 after the time you set in step 5, as [delivery time](#delivery-time) explains.
+
+The weekly email comes on Sunday, after that morning's digest. Its first
+editions cover only the days since you set up the fork, and say so.
+[The weekly edition](#the-weekly-edition) explains the settings.
 
 ### 7. Let the keepalive job push
 
@@ -228,10 +236,12 @@ don't clip. [Email length and Gmail
 clipping](HOW-IT-WORKS.md#email-length-and-gmail-clipping) has measurements.
 
 To run a second set of topics, copy `.github/workflows/daily-digest.yml` to a
-new file and change its `name`. In its last step, add
+new file and change its `name`. In its **Run digest script** step, add
 `DIGEST_CONFIG_PATH: topics-2.json` under `env`, then create `topics-2.json`
-next to `topics.json`. Check in the **Actions** tab that the new workflow is
-enabled.
+next to `topics.json`. In its **Keep this digest** step, change
+`name: daily-digest` to `name: daily-digest-2`, so the weekly edition doesn't
+mix the two sets. Check in the **Actions** tab that the new workflow is
+enabled. The weekly edition covers only the first set.
 
 ### Settings
 
@@ -320,6 +330,61 @@ Things to know:
 - **The job's time limit is 215 minutes,** which is the longest run plus the
   longest wait. Raise it if you raise the cap.
 
+### The weekly edition
+
+Every Sunday a second email reviews the week in each topic. It has:
+
+- **The week in brief:** three or four sentences on what mattered most.
+- **Threads:** the stories that ran on two or more days. Each one says how the
+  story started, what changed and where it stands, and names the days.
+- **Also this week:** one line each for stories that came up on one day only.
+
+The weekly email is written from the week's daily emails, not from the feeds.
+Each daily run keeps a copy of its digest for 14 days. The **Weekly News
+Digest** workflow starts each time a scheduled daily run finishes. It reads
+those copies and sends on the day you set. On the other days it stops after a
+minute and sends nothing.
+
+The settings go in the `weekly` block at the end of `topics.json`:
+
+```json
+"weekly": {
+  "enabled": true,
+  "day": "Sunday",
+  "max_threads": 3
+}
+```
+
+| Setting | What it does |
+|---|---|
+| `enabled` | `false` turns the weekly email off. Without the block it's off. |
+| `day` | The day it's sent, such as `"Saturday"`. The day is in your `timezone`. |
+| `max_threads` | The most threads each topic can have. The default is 3. |
+| `email_subject_prefix` | Optional. Text before the dates in the subject line. The default is `Weekly Digest`. |
+| `deliver_at` | Optional. A time such as `"10:00"`. The weekly run waits until then to send, as the daily one does. |
+| `skip_daily` | Optional. `true` sends no daily email on the weekly day, so you get one email that morning. That day's stories still go into the weekly. |
+
+Things to know:
+
+- **Missing days are stated.** The email says how many of the 7 days it
+  covers and names the missing ones. A day is missing when its daily run
+  failed or saved nothing. With no days at all, no email is sent, and the log
+  says why.
+- **It covers the 7 days that end on the send day.** In a new fork, the first
+  editions cover fewer days.
+- **It adds nothing new.** The model may only use what the daily emails said.
+  The links come from the saved daily stories, so they can't be made up.
+- **When no model answers,** each topic lists the week's headings by day.
+- **To send it now,** open **Weekly News Digest** in the **Actions** tab and
+  click **Run workflow**. With **Send this week's edition now** ticked, it
+  sends on any day. A run by hand never waits for `deliver_at`.
+- **Reruns don't send it twice.** Only the first attempt of a scheduled daily
+  run starts the weekly. A daily run you start by hand doesn't start it, but
+  its digest is still read.
+- **It uses the same free allowance** as the daily email, from the same
+  Gemini key. In a private repo it uses about a minute of Actions time each
+  day, and more on the weekly day.
+
 ### A backup model
 
 All the Gemini models run on Google's servers, so an outage there can stop
@@ -335,7 +400,7 @@ request per topic plus one for the fact. Its writing sounds a little
 different, so you may notice the days it's used.
 
 To pick models yourself, set `GEMINI_MODELS` or `GROQ_MODELS` to a
-comma-separated list under `env` in the workflow's last step. `GEMINI_MODEL`
+comma-separated list under `env` in the workflow's **Run digest script** step. `GEMINI_MODEL`
 puts one model at the front and keeps the defaults behind it.
 
 ## Troubleshooting
@@ -384,6 +449,24 @@ string instead of a list. The message names the topic and field.
 Look for `found 0 raw articles` under the topic's name in the log. A feed may
 have stopped working. [FEEDS.md](FEEDS.md#known-dead) lists feeds known to be
 dead.
+
+### No weekly email arrived
+
+In the **Actions** tab, click **Weekly News Digest**. If a banner says the
+workflow is disabled, click **Enable workflow**. Open the latest run. If it
+was skipped, the daily run before it was started by hand or was a rerun.
+Otherwise open the **Run weekly edition** step:
+
+- `Nothing to send` means today isn't the `day` in the `weekly` block. Check
+  the day and your `timezone`.
+- `The weekly edition is off` means `enabled` isn't `true`.
+- `no saved daily digest` means no daily copy was found. Open the
+  **Download the saved daily digests** step. It lists each file it found and
+  warns about each one it couldn't download.
+
+### The weekly email covers fewer than 7 days
+
+A day is missing when its daily run failed or saved nothing. Look at the daily runs for the missing days in the **Actions** tab.
 
 ### Gemini returns 429
 
@@ -445,7 +528,9 @@ see `topics.json` in a public repo, but secrets stay hidden.
 Each run keeps a copy of its digest as an artifact for 14 days. Anyone signed
 in to GitHub can download artifacts from a public repo. The copy holds only
 what the email showed, with no address or key. See
-[HOW-IT-WORKS.md](HOW-IT-WORKS.md#what-each-run-keeps).
+[HOW-IT-WORKS.md](HOW-IT-WORKS.md#what-each-run-keeps). The weekly workflow
+reads these copies with the run's own token, which can read Actions data but
+can't change the repo. It keeps nothing of its own.
 
 Treat the App Password like your Google password, because it can sign in to
 your account through mail apps. You can revoke it from your Google Account at

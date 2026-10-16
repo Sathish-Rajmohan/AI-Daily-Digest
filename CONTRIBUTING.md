@@ -32,6 +32,20 @@ one before. [When the email
 arrives](HOW-IT-WORKS.md#when-the-email-arrives) explains why the start is also
 shown in UTC.
 
+## Trying the weekly edition
+
+A local run of `digest.py` saves its digest in `saved-digests/`. To build the
+weekly edition from those files:
+
+```bash
+python digest.py --weekly --from saved-digests --any-day
+```
+
+`--any-day` sends it on any day, not only the `day` in the `weekly` block.
+It needs the same keys and Gmail settings as a daily run. To try a workflow
+run's files, download its `daily-digest` artifacts from the **Actions** tab
+and unzip each one into its own folder under the `--from` folder.
+
 ## Before changing the email
 
 Some mistakes in the email code don't raise an error. The email still sends,
@@ -49,6 +63,8 @@ but part of it stops working.
   without `:checked` support leave stories open.
 - Tests check the rule numbers, word limits and worked examples in the prompts.
   If you edit a prompt, update any numbers it quotes.
+- The weekly edition uses the same renderers, with `edition=WEEKLY`. Check a
+  change in both editions. `tests/test_weekly.py` covers the weekly one.
 
 ## Adding a model provider
 

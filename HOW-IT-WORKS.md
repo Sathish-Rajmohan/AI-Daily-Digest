@@ -12,6 +12,8 @@ setup, which the [README](README.md) covers.
 - [Email length and Gmail clipping](#email-length-and-gmail-clipping)
 - [Collapsible stories](#collapsible-stories)
 - [Why citations can't be faked](#why-citations-cant-be-faked)
+- [What each run keeps](#what-each-run-keeps)
+- [The weekly edition](#the-weekly-edition)
 
 ## How articles are chosen
 
@@ -327,10 +329,52 @@ Nothing else from the run goes in: no feed text the email didn't show, and no
 address.
 
 The workflow uploads the folder as an artifact called `daily-digest` and keeps
-it for 14 days. A weekly edition will be written from these files, because by
-the end of a week most feeds no longer hold Monday's articles.
+it for 14 days. The [weekly edition](#the-weekly-edition) is written from
+these files, because by the end of a week most feeds no longer hold Monday's
+articles.
 
 A run whose email fails to send saves nothing. A save that fails is logged,
 and the run still ends normally, since the email is already out. A second run
 on the same day replaces that day's file. A local run writes the same file,
-and git ignores the folder.
+and git ignores the folder. With `skip_daily` on, the weekly day's run sends
+nothing but still saves its file, with `sent_at` set to `null`.
+
+## The weekly edition
+
+The weekly workflow starts when a daily run finishes, so that day's file is
+already saved. It lists the `daily-digest` artifacts that haven't expired,
+from runs on the default branch, and downloads each one into a folder named
+after its run. Every artifact has the same name, so they can't share a
+folder. Then `digest.py --weekly` reads every file it finds. When two files
+hold the same date, the one sent last wins.
+
+The week is the 7 days that end on the send day, in the `timezone` setting.
+The script works out which of those days have a file. A day without one is
+named in a notice at the top of the email.
+
+For each topic, the model gets the week's stories as a numbered list. Each
+entry has its day, its heading and the text the daily email printed. A day
+that fell back to headlines gives one entry per headline. The model is told
+to use only these entries, because they are themselves summaries and a
+weekly review shouldn't add anything new. When a later day corrects an
+earlier one, it uses the later version and says what changed.
+
+The model answers with entry numbers, the same way the daily briefing does.
+The script then checks the answer:
+
+- A thread has to cite entries from two or more days. Otherwise it becomes
+  an "Also this week" line, and so does any thread over `max_threads`.
+- The days in a thread's heading, such as "Monday and Wednesday", come from
+  the cited entries, not from the model.
+- The links under a thread are the saved sources of the entries it cites,
+  up to six. A line gets up to two, and a topic up to eight lines.
+
+If no model answers for a topic, it lists the week's headings by day, up to
+five a day. The weekly email uses the same renderer as the daily one, with
+its own title and its own note for a topic without a review. The size check
+applies to it too. Tests check that a busy week, five topics with nine
+stories a day, stays under the 92KB warning as a review and as headings by
+day.
+
+The weekly run has its own 15-minute model budget and the same model chain.
+It makes one request per topic and asks for no fact.
