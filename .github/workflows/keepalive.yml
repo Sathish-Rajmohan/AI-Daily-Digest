@@ -6,7 +6,7 @@ name: Keepalive
 # well inside that window, so the daily digest schedule never goes idle.
 on:
   schedule:
-    - cron: "0 0 1 * *"   # 00:00 UTC on the 1st of every month
+    - cron: "0 0 1 * *"   # 00:00 Sydney time on the 1st of every month
       timezone: "Australia/Sydney"
   workflow_dispatch: {}   # manual run from the Actions tab
 
