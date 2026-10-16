@@ -115,5 +115,12 @@
     "timezone": "Australia/Sydney",
     "fact_of_the_day": true,
     "collapsible_stories": true
+  },
+
+  "weekly": {
+    "_comment": "The weekly edition: one email on the chosen day, written from that week's daily digests. Set enabled to false to turn it off. README.md explains the settings.",
+    "enabled": true,
+    "day": "Sunday",
+    "max_threads": 3
   }
 }

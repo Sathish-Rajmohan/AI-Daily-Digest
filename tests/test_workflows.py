@@ -48,6 +48,11 @@ def keepalive_workflow():
     return load_workflow("keepalive.yml")
 
 
+@pytest.fixture(scope="module")
+def weekly_workflow():
+    return load_workflow("weekly-digest.yml")
+
+
 def steps(workflow, job):
     return workflow["jobs"][job]["steps"]
 
@@ -201,6 +206,91 @@ def test_the_saved_digest_is_uploaded_after_the_run_and_kept_two_weeks(digest_wo
 
 
 # --------------------------------------------------------------------------
+# The weekly job
+# --------------------------------------------------------------------------
+
+def weekly_step(workflow, name):
+    return next(s for s in steps(workflow, "send-weekly") if s.get("name") == name)
+
+
+def test_weekly_starts_when_a_daily_run_ends_and_by_hand(weekly_workflow, digest_workflow):
+    trigger = weekly_workflow["on"]["workflow_run"]
+    # workflow_run matches on the daily workflow's name, so a rename would
+    # silently stop the weekly edition.
+    assert trigger["workflows"] == [digest_workflow["name"]]
+    assert trigger["types"] == ["completed"]
+    assert "workflow_dispatch" in weekly_workflow["on"]
+    assert "schedule" not in weekly_workflow["on"]
+
+
+def test_weekly_only_follows_the_first_attempt_of_a_scheduled_daily_run(weekly_workflow):
+    condition = " ".join(weekly_workflow["jobs"]["send-weekly"]["if"].split())
+    assert "github.event.workflow_run.event == 'schedule'" in condition
+    assert "github.event.workflow_run.run_attempt == 1" in condition
+    assert "github.event_name == 'workflow_dispatch'" in condition
+
+
+def test_weekly_can_read_artifacts_and_write_nothing(weekly_workflow):
+    assert weekly_workflow["permissions"] == {"actions": "read", "contents": "read"}
+
+
+def test_weekly_uses_the_same_actions_and_python_as_the_daily(weekly_workflow, digest_workflow):
+    def setup(workflow, job):
+        return {s["uses"]: s.get("with") for s in steps(workflow, job) if "uses" in s
+                and s["uses"].startswith(("actions/checkout@", "actions/setup-python@"))}
+    assert setup(weekly_workflow, "send-weekly") == setup(digest_workflow, "send-digest")
+    runs = [s.get("run", "").strip() for s in steps(weekly_workflow, "send-weekly")]
+    assert "pip install -r requirements.txt" in runs
+
+
+def test_weekly_downloads_what_the_daily_uploads_into_the_folder_it_reads(weekly_workflow, digest_workflow):
+    upload = next(s for s in steps(digest_workflow, "send-digest")
+                  if s.get("uses", "").startswith("actions/upload-artifact@"))
+    download = weekly_step(weekly_workflow, "Download the saved daily digests")
+    run = weekly_step(weekly_workflow, "Run weekly edition")
+    job_steps = steps(weekly_workflow, "send-weekly")
+    assert job_steps.index(download) < job_steps.index(run)
+
+    script = download["run"]
+    name = upload["with"]["name"]
+    assert f"artifacts?name={name}" in script and f"--name {name}" in script
+    assert "select(.expired == false" in script
+    # One folder per run, because every artifact has the same name.
+    assert '--dir "weekly-input/$run"' in script
+    assert run["env"]["DIGEST_WEEKLY_DIR"] == "weekly-input"
+    assert download["env"]["GH_TOKEN"].replace(" ", "") == "${{github.token}}"
+    # A failed download leaves days out, and the email says so.
+    assert download["continue-on-error"] is True
+
+
+def test_weekly_passes_the_secrets_and_runs_the_weekly_edition(weekly_workflow):
+    run = weekly_step(weekly_workflow, "Run weekly edition")
+    env = run["env"]
+    assert SECRETS <= set(env)
+    for name in SECRETS:
+        assert env[name].replace(" ", "") == "${{secrets.%s}}" % name
+    assert run["run"].strip() == "python digest.py --weekly $ANY_DAY"
+    assert env["ANY_DAY"].replace(" ", "") == "${{inputs.any_day&&'--any-day'||''}}"
+    assert weekly_workflow["on"]["workflow_dispatch"]["inputs"]["any_day"]["type"] == "boolean"
+
+
+def test_weekly_timeout_leaves_room_for_the_run_and_the_longest_hold(weekly_workflow):
+    topics = len(json.loads((ROOT / "topics.json").read_text(encoding="utf-8"))["topics"])
+    worst = 180                           # checkout, Python setup, pip install
+    worst += 300                          # downloading two weeks of artifacts
+    worst += digest.TOTAL_BUDGET + digest.REQUEST_TIMEOUT + 2 * topics
+    worst += 60                           # SMTP connection timeout
+    worst += digest.MAX_HOLD
+    timeout = weekly_workflow["jobs"]["send-weekly"]["timeout-minutes"] * 60
+    assert worst < timeout < 360 * 60
+
+
+def test_the_shipped_weekly_block_is_on_for_sundays():
+    weekly = json.loads((ROOT / "topics.json").read_text(encoding="utf-8"))["weekly"]
+    assert weekly["enabled"] is True and weekly["day"] == "Sunday"
+
+
+# --------------------------------------------------------------------------
 # The keepalive job
 # --------------------------------------------------------------------------
 
@@ -253,6 +343,15 @@ def run_script(tmp_path, **env_values):
     env.update(env_values)
     return subprocess.run([sys.executable, str(ROOT / "digest.py")], cwd=tmp_path, env=env,
                           capture_output=True, text=True, timeout=120)
+
+
+def test_the_weekly_edition_starts_the_way_the_workflow_starts_it(tmp_path):
+    env = {k: v for k, v in os.environ.items() if k not in SECRETS | OPTIONAL_OVERRIDES | RUN_CONTEXT}
+    env.update(GEMINI_API_KEY="k")
+    result = subprocess.run([sys.executable, str(ROOT / "digest.py"), "--weekly", "--any-day"],
+                            cwd=tmp_path, env=env, capture_output=True, text=True, timeout=120)
+    assert result.returncode == 1
+    assert "missing required env vars: GMAIL_ADDRESS, GMAIL_APP_PASSWORD" in result.stderr
 
 
 def test_script_exits_with_a_reason_when_gmail_secrets_are_missing(tmp_path):

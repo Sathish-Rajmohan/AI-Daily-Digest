@@ -1,0 +1,83 @@
+name: Weekly News Digest
+
+# The weekly edition is written from the digests the daily workflow saves as
+# "daily-digest" artifacts, not from the feeds. It starts each time a daily
+# run finishes, so that day's file is already saved. digest.py only sends on
+# the day set in the "weekly" block of topics.json, and does nothing on the
+# others.
+on:
+  workflow_run:
+    workflows: ["Daily News Digest"]
+    types: [completed]
+  workflow_dispatch:   # manual run from the Actions tab
+    inputs:
+      any_day:
+        description: "Send this week's edition now, even if today isn't the weekly day"
+        type: boolean
+        default: true
+
+# Reading another run's artifacts needs actions: read. Nothing is written.
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  send-weekly:
+    # A daily run started by hand, or a rerun of a scheduled one, also ends
+    # here. Only the first attempt of a scheduled daily run starts the weekly,
+    # so a rerun can't send the week twice.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.event == 'schedule' &&
+       github.event.workflow_run.run_attempt == 1)
+    runs-on: ubuntu-latest
+    # The download takes a minute or two, the model budget is 15 minutes
+    # (TOTAL_BUDGET), and a run can wait up to 3 hours for the weekly
+    # deliver_at (MAX_HOLD in digest.py). The daily job's limit covers the same.
+    timeout-minutes: 215
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # Every daily-digest artifact that hasn't expired, each into a folder
+      # named after its run, because every artifact has the same name and the
+      # same file name on a rerun. They're kept 14 days, so this is at most two
+      # weeks of small files, and digest.py picks the days it needs. A failed
+      # download leaves a day out, and the email says which days it covers.
+      - name: Download the saved daily digests
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          mkdir -p weekly-input
+          gh api --paginate "repos/$REPO/actions/artifacts?name=daily-digest&per_page=100" \
+            --jq ".artifacts[] | select(.expired == false and .workflow_run.head_branch == \"$BRANCH\") | .workflow_run.id" |
+          sort -u |
+          while read -r run; do
+            gh run download "$run" --repo "$REPO" --name daily-digest --dir "weekly-input/$run" ||
+              echo "::warning::couldn't download the saved digest from run $run"
+          done
+          find weekly-input -name 'digest-*.json' | sort
+
+      - name: Run weekly edition
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          # Optional non-Google fallback. The chain skips it when unset.
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          RECIPIENT_EMAIL: ${{ secrets.RECIPIENT_EMAIL }}
+          DIGEST_WEEKLY_DIR: weekly-input
+          # True only for a manual run with the box ticked.
+          ANY_DAY: ${{ inputs.any_day && '--any-day' || '' }}
+        run: python digest.py --weekly $ANY_DAY
