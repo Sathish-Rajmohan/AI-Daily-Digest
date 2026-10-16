@@ -1,7 +1,7 @@
 # Contributing
 
 Issues and pull requests are welcome. New feed presets, other model providers
-and other ways to deliver the digest would all fit.
+and other channels would all fit.
 
 ## Running the tests
 
@@ -37,7 +37,10 @@ one module per job:
 | `briefing.py` | The prompts and schemas for the briefing and the fact of the day |
 | `render.py` | The HTML email for both editions, and the Gmail size check |
 | `amp.py` | The AMP copy that folds in Gmail |
+| `channels/__init__.py` | The channel list: what each needs, and sending to each on its own |
 | `channels/email.py` | Sends the email through Gmail |
+| `channels/chat.py` | Turns the digest into chat messages, one per topic |
+| `channels/telegram.py`, `discord.py`, `slack.py` | Send those messages to each app |
 | `saved.py` | Saves each day's digest and reads the saved ones back |
 | `weekly.py` | The weekly edition's days, stories, prompt and schema |
 
@@ -119,6 +122,23 @@ Schema.
     ],
 }
 ```
+
+## Adding a channel
+
+A chat channel needs a markup class and a send function:
+
+- The markup class extends `PlainText` in `digestlib/channels/chat.py`. Its
+  `escape()` has to make any feed text plain in that app, with no
+  formatting, links or mentions. `bold()`, `link()` and `item()` build the
+  rest.
+- The send function calls `chat_messages(message, markup, limit,
+  story_text)` and posts each text. It reads its secrets from the
+  environment and must not put a token in an error message.
+
+Register it in `CHANNELS` in `digestlib/channels/__init__.py` with the
+secrets it needs and the ones to hide, pass the secrets in both workflows,
+and add them to `SECRETS` in `tests/test_workflows.py`. Test it against a
+fake of the app's API, as `tests/test_telegram.py` does.
 
 ## Feed presets
 

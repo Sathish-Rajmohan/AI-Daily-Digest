@@ -13,6 +13,9 @@ On Sundays a second email reviews the week. It follows the stories that ran
 over several days and lists the rest in a line each. It is written from that
 week's daily emails, so it needs no extra setup.
 
+The digest can also go to Telegram, Discord or Slack, as well as or in place
+of email. See [chat channels](#chat-channels).
+
 It runs on free tiers:
 
 | Piece | What it does | Cost |
@@ -22,6 +25,7 @@ It runs on free tiers:
 | Gemini API | Writes the briefings | Free tier |
 | Groq API | Optional backup when Gemini is down | Free tier |
 | Gmail | Sends the email | Free |
+| Telegram, Discord, Slack | Optional chat delivery | Free |
 
 Other docs:
 
@@ -105,6 +109,9 @@ written.
 If you set up a second Gmail account to send from, `RECIPIENT_EMAIL` is the
 address you read. Without `RECIPIENT_EMAIL`, the digest goes to
 `GMAIL_ADDRESS`.
+
+A chat channel needs its own secrets. [Chat channels](#chat-channels) lists
+them. If you send by chat only, you can leave out the Gmail secrets.
 
 ### 5. Set your time zone and delivery time
 
@@ -385,6 +392,68 @@ Things to know:
   Gemini key. In a private repo it uses about a minute of Actions time each
   day, and more on the weekly day.
 
+### Chat channels
+
+The digest can go to Telegram, Discord or Slack, as well as or in place of
+email. Add a `channels` list to `topics.json`, for example:
+
+```json
+"channels": [
+  {"type": "email"},
+  {"type": "telegram"},
+  {"type": "discord", "editions": ["weekly"]},
+  {"type": "slack", "story_text": true}
+]
+```
+
+Without the list, the digest goes by email only. With it, the digest goes to
+each channel listed, and by email only if `email` is listed.
+
+| Key | What it does | Default |
+|---|---|---|
+| `type` | `email`, `telegram`, `discord` or `slack` | Required |
+| `editions` | `["daily"]`, `["weekly"]` or both | Both |
+| `story_text` | Adds each story's text under its heading in a chat | `false` |
+
+A chat gets one message per topic: the overview, then each story's heading
+linked to its first source. Chat apps can't fold stories, so the story text
+is left out unless `story_text` is on. A topic too long for one message is
+split between stories. The fact of the day comes last.
+
+Each channel is sent to on its own. If one fails, the others still get the
+digest, and the log says which one failed. The run only shows a red cross if
+every channel failed.
+
+#### Telegram
+
+1. In Telegram, message **@BotFather**, send `/newbot` and follow the steps.
+   It gives you a token.
+2. Open a chat with your new bot and send it any message. To use a group,
+   add the bot to the group and send a message there.
+3. Open `https://api.telegram.org/bot<token>/getUpdates` in a browser, with
+   your token in place of `<token>`. Copy the number after `"chat":{"id":`.
+   A group's number starts with a minus sign.
+4. Add the token as the `TELEGRAM_BOT_TOKEN` secret and the number as
+   `TELEGRAM_CHAT_ID`.
+
+#### Discord
+
+1. In the Discord channel's settings, open **Integrations > Webhooks** and
+   click **New Webhook**.
+2. Click **Copy Webhook URL** and add it as the `DISCORD_WEBHOOK_URL` secret.
+
+Everyone who can read the channel sees the digest.
+
+#### Slack
+
+1. At [api.slack.com/apps](https://api.slack.com/apps), click **Create New
+   App**, choose **From scratch** and pick your workspace.
+2. Open **Incoming Webhooks** and turn it on. Click **Add New Webhook to
+   Workspace** and pick a channel.
+3. Copy the webhook URL and add it as the `SLACK_WEBHOOK_URL` secret.
+
+Everyone in the channel sees the digest.
+
 ### A backup model
 
 All the Gemini models run on Google's servers, so an outage there can stop
@@ -414,6 +483,18 @@ reported there.
 If the run shows a red cross, open its log. If it succeeded, check the spam
 folder of `RECIPIENT_EMAIL`. A wrong App Password or a rejected Gmail sign-in
 is reported at the end of the log.
+
+### A chat channel got nothing
+
+The log has a line such as `[error] telegram failed:` with the reason.
+
+- `missing required env vars: ... (the telegram channel needs them)`: a
+  secret for a listed channel isn't set, so the run stopped before it began.
+- Telegram `401: Unauthorized`: the token is wrong. `400: Bad Request: chat
+  not found`: the chat id is wrong, or nobody has sent the bot a message yet.
+- Discord `404: Unknown Webhook`: the webhook was deleted. Make a new one.
+- Slack `404: no_service` or `403`: the webhook was removed or the app was
+  uninstalled. Add a new webhook.
 
 ### It worked once but doesn't run every morning
 
@@ -532,6 +613,10 @@ what the email showed, with no address or key. See
 reads these copies with the run's own token, which can read Actions data but
 can't change the repo. It keeps nothing of its own.
 
+A bot token and a webhook address are secrets too. Anyone who has one can post
+to your chat or channel as the digest. The log hides them, even inside error
+messages. To revoke one, send `/revoke` to @BotFather, or delete the webhook.
+
 Treat the App Password like your Google password, because it can sign in to
 your account through mail apps. You can revoke it from your Google Account at
 any time without changing your main password. A second Gmail account used only
@@ -540,7 +625,7 @@ for sending keeps your main account out of this entirely.
 ## Contributing
 
 Issues and pull requests are welcome. [CONTRIBUTING.md](CONTRIBUTING.md)
-covers running the tests and adding a model provider.
+covers running the tests, adding a model provider and adding a channel.
 
 ## License
 

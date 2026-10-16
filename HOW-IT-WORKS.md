@@ -378,3 +378,34 @@ day.
 
 The weekly run has its own 15-minute model budget and the same model chain.
 It makes one request per topic and asks for no fact.
+
+## Chat channels
+
+A chat app can't fold stories, and dozens of full stories are too much for
+a chat. So a chat gets one message per topic: its name, the overview, and
+each story's heading linked to the first source the story cites. The heading is
+the story's subheading, or its first sentence if it has none. With
+`story_text` on, each story's text follows its heading.
+
+Each channel has a limit on one message: 4,096 characters in Telegram, 4,096
+in a Discord embed and 3,000 in a Slack section. A topic over the limit is
+split between stories, never inside one. A story whose text alone is over
+the limit has its text shortened, so the story still fits in one message.
+
+Feed and model text can't act as chat markup. Each channel escapes the
+characters its app reads as formatting: `<`, `>` and `&` for Telegram and
+Slack, and markdown characters for Discord. Mentions are switched off:
+Discord is told to ping nobody, Slack's `<!channel>` is escaped, and a word
+joiner after each `@` in Telegram stops a name from notifying anyone. Link
+previews are off, so a message doesn't fill with the first link's card.
+
+Each channel is sent to on its own, in the order listed. The log says which
+ones worked. The run fails only if every channel failed, and the day is saved
+for the weekly edition if any channel got it. Messages go out a second
+apart, as each app asks. A 429 is waited out once, for up to 30 seconds, as
+the app's reply says.
+
+A bot token or webhook address works like a password for the chat. An
+error can quote the address a request went to, so every line the run prints
+is checked, and each secret, and the path of each webhook address, is
+replaced by its name.
