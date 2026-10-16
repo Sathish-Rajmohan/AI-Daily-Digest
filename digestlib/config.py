@@ -6,6 +6,8 @@ import json
 import os
 import re
 
+from digestlib.channels import CHANNELS, EDITIONS
+
 
 CONFIG_PATH = os.environ.get("DIGEST_CONFIG_PATH", "topics.json")
 
@@ -23,6 +25,7 @@ def load_config():
         _check_topic(topic, index)
     _check_settings(config.get("settings"))
     _check_weekly(config.get("weekly"))
+    _check_channels(config.get("channels"), config.get("weekly") or {})
     return config
 
 
@@ -106,3 +109,36 @@ def _check_weekly(weekly):
 
     if "email_subject_prefix" in weekly and not isinstance(weekly["email_subject_prefix"], str):
         raise ValueError(f"{CONFIG_PATH}: 'weekly.email_subject_prefix' must be text")
+
+
+def _check_channels(channels, weekly):
+    """The "channels" list says where the digest goes. It's optional, and the
+    digest goes by email without it.
+    """
+    if channels is None:
+        return
+    if not isinstance(channels, list) or not channels:
+        raise ValueError(f"{CONFIG_PATH}: 'channels' must be a list with at least one channel, "
+                         'such as [{"type": "email"}]')
+
+    seen = set()
+    for index, channel in enumerate(channels, start=1):
+        if not isinstance(channel, dict) or channel.get("type") not in CHANNELS:
+            raise ValueError(f"{CONFIG_PATH}: channel {index} needs a 'type', one of: "
+                             f"{', '.join(CHANNELS)}")
+        kind = channel["type"]
+        if kind in seen:
+            raise ValueError(f"{CONFIG_PATH}: '{kind}' is listed twice in 'channels'")
+        seen.add(kind)
+        editions = channel.get("editions", list(EDITIONS))
+        if not (isinstance(editions, list) and editions and all(e in EDITIONS for e in editions)):
+            raise ValueError(f"{CONFIG_PATH}: the '{kind}' channel's 'editions' must list "
+                             '"daily", "weekly" or both')
+
+    # The daily runs save what the weekly edition is written from, so the
+    # daily edition always needs somewhere to go.
+    if not any("daily" in c.get("editions", EDITIONS) for c in channels):
+        raise ValueError(f"{CONFIG_PATH}: no channel in 'channels' carries the daily edition")
+    if weekly.get("enabled") and not any("weekly" in c.get("editions", EDITIONS) for c in channels):
+        raise ValueError(f"{CONFIG_PATH}: the weekly edition is on, but no channel in 'channels' "
+                         "carries it")

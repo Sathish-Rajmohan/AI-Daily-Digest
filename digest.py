@@ -56,6 +56,7 @@ from digestlib.render import (
 )
 from digestlib.amp import AMP_MAX_BYTES, _amp_copy, build_amp
 from digestlib.channels.email import send_email
+from digestlib.channels import channels_for, missing_secrets, send_to_channels, wants_html
 from digestlib.saved import (
     SAVE_DIR, daily_skipped, digest_record, load_saved_digests, save_digest,
 )
@@ -80,11 +81,13 @@ def __getattr__(name):
 sys.stdout.reconfigure(line_buffering=True)
 
 
-def _check_environment():
-    """Stop before any work if Gmail or every model provider isn't set up."""
-    missing = [k for k in ("GMAIL_ADDRESS", "GMAIL_APP_PASSWORD") if not os.environ.get(k)]
+def _check_environment(channels):
+    """Stop before any work if a channel or every model provider isn't set up."""
+    missing = missing_secrets(channels)
+    for kind, names in missing:
+        print(f"ERROR: missing required env vars: {', '.join(names)} (the {kind} channel needs them)",
+              file=sys.stderr)
     if missing:
-        print(f"ERROR: missing required env vars: {', '.join(missing)}", file=sys.stderr)
         sys.exit(1)
 
     # Either provider can write the briefings.
@@ -108,9 +111,10 @@ def _check_environment():
 
 
 def main():
-    _check_environment()
-
     config = load_config()
+    channels = channels_for(config, "daily")
+    _check_environment(channels)
+
     settings = config.get("settings") or {}
     lookback_hours = settings.get("lookback_hours", 24)
     subject_prefix = settings.get("email_subject_prefix", "Daily Digest")
@@ -243,21 +247,20 @@ def main():
     print(f"Model time used: {TOTAL_BUDGET - _budget_left():.0f}s of {TOTAL_BUDGET}s")
 
     date_str = now_local.strftime("%A, %d %B %Y")
-    # One setting controls the AMP copy and the checkbox folding.
-    collapsible = settings.get("collapsible_stories", True)
-    html_body = build_html(topic_results, date_str, fact, collapsible=collapsible)
-    subject = f"{subject_prefix} - {date_str}"
-    check_email_size(html_body)
-
-    amp_body = _amp_copy(topic_results, date_str, fact) if collapsible else None
+    message = {"edition": "daily", "subject": f"{subject_prefix} - {date_str}", "date": date_str,
+               "topic_results": topic_results, "fact": fact, "notices": [],
+               "html": None, "amp": None}
+    if wants_html(channels):
+        # One setting controls the AMP copy and the checkbox folding.
+        collapsible = settings.get("collapsible_stories", True)
+        message["html"] = build_html(topic_results, date_str, fact, collapsible=collapsible)
+        check_email_size(message["html"])
+        message["amp"] = _amp_copy(topic_results, date_str, fact) if collapsible else None
 
     waited = _hold_until(deliver, local_tz) if deliver else 0
 
-    print("Sending email...")
-    try:
-        send_email(subject, html_body, amp_body)
-    except Exception as e:
-        print(f"ERROR: failed to send email: {e}", file=sys.stderr)
+    if not send_to_channels(channels, message):
+        print("ERROR: the digest couldn't be sent to any channel.", file=sys.stderr)
         sys.exit(1)
     sent = datetime.now(timezone.utc)
 
@@ -277,9 +280,10 @@ def main():
 
 def weekly_main(folder=WEEKLY_DIR, any_day=False):
     """Send the weekly edition, if it's on and today is its day."""
-    _check_environment()
-
     config = load_config()
+    channels = channels_for(config, "weekly")
+    _check_environment(channels)
+
     settings = config.get("settings") or {}
     weekly = config.get("weekly") or {}
     if not weekly.get("enabled", False):
@@ -343,11 +347,15 @@ def weekly_main(folder=WEEKLY_DIR, any_day=False):
         sys.exit(1)
 
     notices = [text for text in [coverage_notice(days, found)] if text]
-    collapsible = settings.get("collapsible_stories", True)
-    html_body = build_html(topic_results, label, None, collapsible, WEEKLY, notices)
-    subject = f"{weekly.get('email_subject_prefix', 'Weekly Digest')} - {label}"
-    check_email_size(html_body)
-    amp_body = _amp_copy(topic_results, label, None, WEEKLY, notices) if collapsible else None
+    message = {"edition": "weekly", "date": label, "topic_results": topic_results, "fact": None,
+               "subject": f"{weekly.get('email_subject_prefix', 'Weekly Digest')} - {label}",
+               "notices": notices, "html": None, "amp": None}
+    if wants_html(channels):
+        collapsible = settings.get("collapsible_stories", True)
+        message["html"] = build_html(topic_results, label, None, collapsible, WEEKLY, notices)
+        check_email_size(message["html"])
+        message["amp"] = (_amp_copy(topic_results, label, None, WEEKLY, notices)
+                          if collapsible else None)
 
     # The weekly run starts when the daily run ends. deliver_at only holds a run
     # started that way, so a run by hand sends at once.
@@ -356,11 +364,8 @@ def weekly_main(folder=WEEKLY_DIR, any_day=False):
         hour, minute = (int(part) for part in deliver_at.split(":"))
         _hold_until(_local_time_on(today, hour, minute, local_tz), local_tz)
 
-    print("Sending the weekly email...")
-    try:
-        send_email(subject, html_body, amp_body)
-    except Exception as e:
-        print(f"ERROR: failed to send email: {e}", file=sys.stderr)
+    if not send_to_channels(channels, message):
+        print("ERROR: the weekly edition couldn't be sent to any channel.", file=sys.stderr)
         sys.exit(1)
     print(f"Sent the weekly edition at {_stamp(datetime.now(timezone.utc), local_tz)}.")
     print("Done.")

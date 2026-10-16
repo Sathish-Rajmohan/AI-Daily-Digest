@@ -344,6 +344,14 @@ def test_dev_requirements_build_on_the_runtime_ones():
 # Starting the script the way the workflow does
 # --------------------------------------------------------------------------
 
+def with_topics(tmp_path):
+    """A topics.json with no topics. The script reads it before it checks the
+    secrets, because the channels it lists decide which secrets are needed.
+    """
+    (tmp_path / "topics.json").write_text('{"topics": []}', encoding="utf-8")
+    return tmp_path
+
+
 def run_script(tmp_path, **env_values):
     env = {k: v for k, v in os.environ.items() if k not in SECRETS | OPTIONAL_OVERRIDES | RUN_CONTEXT}
     env.update(env_values)
@@ -352,6 +360,7 @@ def run_script(tmp_path, **env_values):
 
 
 def test_the_weekly_edition_starts_the_way_the_workflow_starts_it(tmp_path):
+    with_topics(tmp_path)
     env = {k: v for k, v in os.environ.items() if k not in SECRETS | OPTIONAL_OVERRIDES | RUN_CONTEXT}
     env.update(GEMINI_API_KEY="k")
     result = subprocess.run([sys.executable, str(ROOT / "digest.py"), "--weekly", "--any-day"],
@@ -361,7 +370,7 @@ def test_the_weekly_edition_starts_the_way_the_workflow_starts_it(tmp_path):
 
 
 def test_script_exits_with_a_reason_when_gmail_secrets_are_missing(tmp_path):
-    result = run_script(tmp_path, GEMINI_API_KEY="k")
+    result = run_script(with_topics(tmp_path), GEMINI_API_KEY="k")
     assert result.returncode == 1
     assert "missing required env vars: GMAIL_ADDRESS, GMAIL_APP_PASSWORD" in result.stderr
 
@@ -369,13 +378,13 @@ def test_script_exits_with_a_reason_when_gmail_secrets_are_missing(tmp_path):
 # Actions passes an unset secret through as an empty string, not as a missing
 # variable, so an empty value has to count as not set.
 def test_empty_secrets_count_as_not_set(tmp_path):
-    result = run_script(tmp_path, **{name: "" for name in SECRETS})
+    result = run_script(with_topics(tmp_path), **{name: "" for name in SECRETS})
     assert result.returncode == 1
     assert "missing required env vars: GMAIL_ADDRESS, GMAIL_APP_PASSWORD" in result.stderr
 
 
 def test_script_exits_with_a_reason_when_no_model_key_is_set(tmp_path):
-    result = run_script(tmp_path, GMAIL_ADDRESS="a@example.com", GMAIL_APP_PASSWORD="x",
+    result = run_script(with_topics(tmp_path), GMAIL_ADDRESS="a@example.com", GMAIL_APP_PASSWORD="x",
                         GEMINI_API_KEY="", GROQ_API_KEY="")
     assert result.returncode == 1
     assert "set GEMINI_API_KEY, GROQ_API_KEY, or both" in result.stderr
