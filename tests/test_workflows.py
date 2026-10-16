@@ -24,7 +24,7 @@ WORKFLOWS = ROOT / ".github" / "workflows"
 # Every environment variable digest.py reads, split by who sets it.
 SECRETS = {"GEMINI_API_KEY", "GROQ_API_KEY", "GMAIL_ADDRESS", "GMAIL_APP_PASSWORD", "RECIPIENT_EMAIL"}
 OPTIONAL_OVERRIDES = {"GEMINI_MODELS", "GEMINI_MODEL", "GROQ_MODELS", "DIGEST_CONFIG_PATH",
-                      "DIGEST_SCHEDULE_TZ", "DIGEST_SAVE_DIR"}
+                      "DIGEST_SCHEDULE_TZ", "DIGEST_SAVE_DIR", "DIGEST_WEEKLY_DIR"}
 # How the script learns which trigger started it. Actions sets the first, and
 # the workflow passes the second.
 RUN_CONTEXT = {"GITHUB_EVENT_NAME", "DIGEST_SCHEDULE"}

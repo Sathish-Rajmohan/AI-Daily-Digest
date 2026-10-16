@@ -6,6 +6,7 @@ briefing for each topic, and emails the result through Gmail. Setup is in
 README.md.
 """
 
+import argparse
 import html
 import json
 import os
@@ -17,7 +18,7 @@ import ssl
 import sys
 import time
 from contextlib import contextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from urllib.parse import urlsplit
@@ -69,6 +70,8 @@ MAX_HOLD = 180 * 60
 
 DELIVER_AT = re.compile(r"([01]?\d|2[0-3]):([0-5]\d)")
 
+WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+
 
 def load_config():
     with open(CONFIG_PATH, "r", encoding="utf-8") as f:
@@ -78,6 +81,7 @@ def load_config():
     for index, topic in enumerate(config["topics"], start=1):
         _check_topic(topic, index)
     _check_settings(config.get("settings"))
+    _check_weekly(config.get("weekly"))
     return config
 
 
@@ -130,6 +134,36 @@ def _check_settings(settings):
         isinstance(deliver_at, str) and DELIVER_AT.fullmatch(deliver_at)
     ):
         raise ValueError(f"{CONFIG_PATH}: 'deliver_at' must be a 24-hour time such as \"08:00\"")
+
+
+def _check_weekly(weekly):
+    """The "weekly" block turns on the weekly edition. It's optional, and the
+    edition is off without it.
+    """
+    if weekly is None:
+        return
+    if not isinstance(weekly, dict):
+        raise ValueError(f"{CONFIG_PATH}: 'weekly' must be an object")
+
+    if not isinstance(weekly.get("enabled", False), bool):
+        raise ValueError(f"{CONFIG_PATH}: 'weekly.enabled' must be true or false")
+
+    day = weekly.get("day", "Sunday")
+    if not (isinstance(day, str) and day.strip().title() in WEEKDAYS):
+        raise ValueError(f"{CONFIG_PATH}: 'weekly.day' must be a day of the week, such as \"Sunday\"")
+
+    deliver_at = weekly.get("deliver_at")
+    if deliver_at is not None and not (
+        isinstance(deliver_at, str) and DELIVER_AT.fullmatch(deliver_at)
+    ):
+        raise ValueError(f"{CONFIG_PATH}: 'weekly.deliver_at' must be a 24-hour time such as \"09:00\"")
+
+    max_threads = weekly.get("max_threads", 3)
+    if isinstance(max_threads, bool) or not isinstance(max_threads, int) or max_threads < 1:
+        raise ValueError(f"{CONFIG_PATH}: 'weekly.max_threads' must be a whole number of 1 or more")
+
+    if "email_subject_prefix" in weekly and not isinstance(weekly["email_subject_prefix"], str):
+        raise ValueError(f"{CONFIG_PATH}: 'weekly.email_subject_prefix' must be text")
 
 
 def parse_entry_time(entry):
@@ -1285,6 +1319,23 @@ _TOPIC_INKS = ["#0e6a66", "#9a2c3c", "#34489a", "#52661d", "#8b5a06", "#7a3e7c"]
 # Words per minute for the reading-time estimate.
 _READING_WPM = 230
 
+# What differs between the daily email and the weekly edition. The colours,
+# fonts and folding are shared.
+DAILY = {
+    "title": "Daily Digest",
+    "ready": "Your daily digest is ready.",
+    "headlines": ("No summary was available for this topic this run, so the "
+                  "latest stories are listed directly."),
+    "empty": "No new stories found in the lookback window.",
+}
+WEEKLY = {
+    "title": "Weekly Digest",
+    "ready": "Your weekly digest is ready.",
+    "headlines": ("No summary was available for this topic this week, so the "
+                  "week's stories are listed by day."),
+    "empty": "No stories were saved this week.",
+}
+
 
 def _topic_ink(index):
     """A topic's colour, picked by its position in topics.json so it stays the
@@ -1341,7 +1392,7 @@ def _sources_html(sources, label="Sources", ink=_ACCENT):
     )
 
 
-def _build_preheader(topic_results):
+def _build_preheader(topic_results, ready=DAILY["ready"]):
     """The inbox preview text: the first subheading from each topic, capped at
     140 characters.
     """
@@ -1355,7 +1406,7 @@ def _build_preheader(topic_results):
                 subheadings.append(sub)
                 break  # first subheading per topic
     if not subheadings:
-        return "Your daily digest is ready."
+        return ready
     text = " • ".join(subheadings)
     if len(text) > 140:
         text = text[:137].rstrip() + "..."
@@ -1367,17 +1418,19 @@ def _plural(count, singular, plural):
 
 
 def _story_count(brief):
-    """Stories in a topic, or headlines if it's the fallback list."""
+    """Stories in a topic, or headlines if it's the fallback list. The weekly
+    edition's one-line stories count too.
+    """
     stories = brief.get("stories") or []
     if brief.get("degraded"):
         return sum(len(s.get("sources") or []) for s in stories)
-    return len(stories)
+    return len(stories) + len(brief.get("also") or [])
 
 
 def _topic_outlets(brief):
     return {
         s["outlet"]
-        for story in brief.get("stories") or []
+        for story in (brief.get("stories") or []) + (brief.get("also") or [])
         for s in story.get("sources") or []
         if s.get("outlet")
     }
@@ -1423,6 +1476,9 @@ def _digest_summary(topic_results, fact, collapsible):
                 titles = sum(_words(s.get("title")) for s in story.get("sources") or [])
                 skim += titles
                 full += titles
+        for item in brief.get("also") or []:
+            skim += _words(item.get("line"))
+            full += _words(item.get("line"))
     words = skim if collapsible else full
     return {
         "topics": topics,
@@ -1554,7 +1610,41 @@ def _collapsible_story_html(story, sources_label, ink=_ACCENT):
     )
 
 
-def build_html(topic_results, date_str, fact=None, collapsible=False):
+def _also_html(items, ink=_ACCENT):
+    """The weekly edition's one-line stories. Each line ends with links named
+    after the outlets that reported it.
+    """
+    rows = ""
+    for item in items or []:
+        line = (item.get("line") or "").strip()
+        if not line:
+            continue
+        links = []
+        for s in item.get("sources") or []:
+            link = _web_link(s.get("link"))
+            if link:
+                name = html.escape(s.get("outlet") or s.get("title") or "Source")
+                links.append(
+                    f'<a href="{html.escape(link, quote=True)}" style="color:{ink};'
+                    f'text-decoration:none;font-weight:600;">{name}</a>'
+                )
+        tail = f' &#8250;&nbsp;{" &middot; ".join(links)}' if links else ""
+        rows += f'<li style="margin:0 0 9px;">{html.escape(line)}{tail}</li>'
+    if not rows:
+        return ""
+    return (
+        f'<div style="margin-top:22px;">'
+        f'<div style="font-size:10px;font-weight:700;letter-spacing:0.12em;'
+        f'text-transform:uppercase;color:{_TEXT_MUTED};margin-bottom:9px;">Also this week</div>'
+        f'<ul style="margin:0;padding:0;list-style:none;font-size:14px;line-height:1.55;'
+        f'color:{_TEXT_BODY};">{rows}</ul></div>'
+    )
+
+
+def build_html(topic_results, date_str, fact=None, collapsible=False, edition=DAILY, notices=()):
+    """The email. `edition` is DAILY or WEEKLY, and each of `notices` is shown
+    in a box near the top.
+    """
     summary = _digest_summary(topic_results, fact, collapsible)
     sections = []
     failed_topics = []
@@ -1571,8 +1661,7 @@ def build_html(topic_results, date_str, fact=None, collapsible=False):
         if degraded:
             overview_html = (
                 f'<p style="font-size:14px;color:{_TEXT_MUTED};line-height:1.6;'
-                f'margin:14px 0 0 0;">No summary was available for this topic '
-                f'this run, so the latest stories are listed directly.</p>'
+                f'margin:14px 0 0 0;">{html.escape(edition["headlines"])}</p>'
             )
         else:
             overview_html = _paragraphs_to_html(
@@ -1608,7 +1697,7 @@ def build_html(topic_results, date_str, fact=None, collapsible=False):
                 f'<div style="margin-top:24px;">'
                 f'{sub_html}'
                 f'{_paragraphs_to_html(detail)}'
-                f'{_sources_html(sources, "Stories" if degraded else None, ink)}'
+                f'{_sources_html(sources, "Stories" if degraded and not subheading else None, ink)}'
                 f'</div>'
             )
 
@@ -1620,13 +1709,20 @@ def build_html(topic_results, date_str, fact=None, collapsible=False):
             f'{html.escape(_topic_meta(brief))}</div>'
             f'{overview_html}'
             f'{stories_html}'
+            f'{_also_html(brief.get("also"), ink)}'
             f'</div>'
         )
 
     body = "".join(sections) if sections else (
         f'<div style="margin-top:36px;padding-top:30px;border-top:1px solid {_BORDER};'
-        f'font-size:15px;color:{_TEXT_BODY};">No new stories found in the '
-        f'lookback window.</div>'
+        f'font-size:15px;color:{_TEXT_BODY};">{html.escape(edition["empty"])}</div>'
+    )
+
+    notice_html = "".join(
+        f'<div style="margin:28px 0 0 0;padding:12px 14px;background:{_WARN_BG};'
+        f'border:1px solid {_WARN_BORDER};border-radius:4px;font-size:13px;'
+        f'color:{_WARN_TEXT};">{html.escape(text)}</div>'
+        for text in notices
     )
 
     failure_notice = ""
@@ -1647,9 +1743,10 @@ def build_html(topic_results, date_str, fact=None, collapsible=False):
         if summary_line else ""
     )
 
-    preheader = html.escape(_build_preheader(topic_results))
+    preheader = html.escape(_build_preheader(topic_results, edition["ready"]))
     # Stops Gmail and Outlook filling the rest of the preview with body text.
     preheader_pad = "&#8203;&nbsp;" * 120
+    title = html.escape(edition["title"])
 
     return _compact_html(f"""
     <html>
@@ -1658,7 +1755,7 @@ def build_html(topic_results, date_str, fact=None, collapsible=False):
       <meta name="viewport" content="width=device-width, initial-scale=1">
       <meta name="color-scheme" content="light">
       <meta name="supported-color-schemes" content="light">
-      <title>Daily Digest</title>
+      <title>{title}</title>
       {_COLLAPSE_CSS if collapsible else ""}
     </head>
     <body style="margin:0;padding:0;background:{_PAGE_BG};">
@@ -1678,11 +1775,12 @@ def build_html(topic_results, date_str, fact=None, collapsible=False):
                     text-transform:uppercase;color:{_TEXT_MUTED};">{html.escape(date_str)}</div>
                   <div style="font-family:{_SERIF_STACK};font-size:38px;line-height:1.1;
                     font-weight:700;letter-spacing:-0.01em;color:{_TEXT_HEADING};
-                    margin-top:8px;">Daily Digest</div>
+                    margin-top:8px;">{title}</div>
                   {summary_html}
                   {_topic_strip_html(summary)}
                   {_topic_index_html(summary)}
                   {_fact_block(fact)}
+                  {notice_html}
                   {failure_notice}
                   {body}
                   <div style="margin-top:36px;padding-top:20px;border-top:1px solid {_BORDER};
@@ -1809,6 +1907,9 @@ body {{ margin:0; padding:0; background:{_PAGE_BG}; font-family:{_FONT_STACK}; c
 .muted {{ color:{_TEXT_MUTED}; }}
 .arrow {{ color:{_ACCENT}; }}
 .mark {{ color:{_ACCENT}; }}
+.day {{ font-size:15px; font-weight:700; color:{_TEXT_HEADING}; margin:20px 0 0 0; }}
+.also {{ margin-top:22px; }}
+.also-list {{ font-size:14px; color:{_TEXT_BODY}; }}
 .empty {{ margin-top:36px; padding-top:30px; border-top:1px solid {_BORDER};
   font-size:15px; color:{_TEXT_BODY}; }}
 .footer {{ margin-top:36px; padding-top:20px; border-top:1px solid {_BORDER};
@@ -1837,6 +1938,29 @@ def _amp_sources(sources, label="Sources"):
         return ""
     heading = f'<div class="sources-label">{label}</div>' if label else ""
     return f'<div class="sources">{heading}<ul class="source-list">{items}</ul></div>'
+
+
+def _amp_also(items):
+    """The AMP copy of _also_html()."""
+    rows = ""
+    for item in items or []:
+        line = (item.get("line") or "").strip()
+        if not line:
+            continue
+        links = []
+        for s in item.get("sources") or []:
+            link = _web_link(s.get("link"))
+            if link:
+                name = html.escape(s.get("outlet") or s.get("title") or "Source")
+                links.append(f'<a href="{html.escape(link, quote=True)}" target="_blank">{name}</a>')
+        tail = f' <span class="arrow">&#8250;</span> {" &middot; ".join(links)}' if links else ""
+        rows += f"<li>{html.escape(line)}{tail}</li>"
+    if not rows:
+        return ""
+    return (
+        '<div class="also"><div class="sources-label">Also this week</div>'
+        f'<ul class="source-list also-list">{rows}</ul></div>'
+    )
 
 
 def _amp_strip(summary):
@@ -1883,7 +2007,7 @@ def _story_label(story):
     return first or "More on this topic"
 
 
-def build_amp(topic_results, date_str, fact=None):
+def build_amp(topic_results, date_str, fact=None, edition=DAILY, notices=()):
     """The AMP version of the email, with the same content as build_html().
     Each story's text and sources fold under its subheading. Overviews and the
     fact stay open.
@@ -1901,12 +2025,13 @@ def build_amp(topic_results, date_str, fact=None):
 
         if brief.get("degraded"):
             # A headline list has nothing to fold.
-            inner = (
-                '<p class="note">No summary was available for this topic this run, '
-                "so the latest stories are listed directly.</p>"
-            )
+            inner = f'<p class="note">{html.escape(edition["headlines"])}</p>'
             for story in brief.get("stories") or []:
-                inner += _amp_sources(story.get("sources"), "Stories")
+                # The weekly edition's list has a heading for each day.
+                day = (story.get("subheading") or "").strip()
+                if day:
+                    inner += f'<div class="day">{html.escape(day)}</div>'
+                inner += _amp_sources(story.get("sources"), None if day else "Stories")
         else:
             inner = _amp_paragraphs(brief.get("overview"), "overview")
             rows = ""
@@ -1925,6 +2050,7 @@ def build_amp(topic_results, date_str, fact=None):
             if rows:
                 has_accordion = True
                 inner += f'<amp-accordion class="stories">{rows}</amp-accordion>'
+            inner += _amp_also(brief.get("also"))
 
         sections.append(
             f'<div class="topic ink{index % len(_TOPIC_INKS)}">'
@@ -1934,8 +2060,9 @@ def build_amp(topic_results, date_str, fact=None):
         )
 
     body = "".join(sections) if sections else (
-        '<div class="empty">No new stories found in the lookback window.</div>'
+        f'<div class="empty">{html.escape(edition["empty"])}</div>'
     )
+    notice_html = "".join(f'<div class="warn">{html.escape(text)}</div>' for text in notices)
 
     failure_notice = ""
     if failed_topics:
@@ -1974,11 +2101,12 @@ def build_amp(topic_results, date_str, fact=None):
     <body>
       <div class="wrap"><div class="card">
         <div class="dateline">{html.escape(date_str)}</div>
-        <div class="title">Daily Digest</div>
+        <div class="title">{html.escape(edition["title"])}</div>
         {summary_html}
         {strip_html}
         {index_html}
         {fact_html}
+        {notice_html}
         {failure_notice}
         {body}
         <div class="footer">{html.escape(_footer_text(summary))}</div>
@@ -2138,7 +2266,8 @@ def save_digest(record):
     return path
 
 
-def main():
+def _check_environment():
+    """Stop before any work if Gmail or every model provider isn't set up."""
     missing = [k for k in ("GMAIL_ADDRESS", "GMAIL_APP_PASSWORD") if not os.environ.get(k)]
     if missing:
         print(f"ERROR: missing required env vars: {', '.join(missing)}", file=sys.stderr)
@@ -2163,19 +2292,56 @@ def main():
         )
         sys.exit(1)
 
+
+def _local_zone(settings):
+    """The time zone from settings, and whether it was known. UTC if it wasn't."""
+    name = settings.get("timezone", "Australia/Sydney")
+    try:
+        return ZoneInfo(name), True
+    except Exception:
+        print(f"  [warn] unknown timezone '{name}', falling back to UTC", file=sys.stderr)
+        return timezone.utc, False
+
+
+def _amp_copy(topic_results, date_str, fact, edition=DAILY, notices=()):
+    """The collapsible AMP copy, or None if it's over AMP's size limit."""
+    amp_body = build_amp(topic_results, date_str, fact, edition, notices)
+    amp_size = len(amp_body.encode("utf-8"))
+    print(f"Collapsible version is {amp_size / 1024:.0f}KB (AMP allows {AMP_MAX_BYTES // 1000}KB)")
+    if amp_size > AMP_MAX_BYTES:
+        print(
+            "  [warn] the collapsible version is over AMP's size limit, so Gmail "
+            "would ignore it. Sending the full version only. Lower max_stories "
+            "in topics.json to bring it back.",
+            file=sys.stderr,
+        )
+        return None
+    return amp_body
+
+
+def _hold_until(deliver, local_tz):
+    """Wait until `deliver`, for at most MAX_HOLD. Returns the seconds waited."""
+    left = (deliver - datetime.now(timezone.utc)).total_seconds()
+    if left <= 0:
+        print(f"Ready {_minutes(timedelta(seconds=-left))} min after deliver_at. Sending now.")
+        return 0
+    wait = min(left, MAX_HOLD)
+    if wait < left:
+        print(f"  [warn] deliver_at is {left / 60:.0f} min away, past the {MAX_HOLD // 60} min "
+              "hold limit, so this run only waits that long.", file=sys.stderr)
+    print(f"Ready early. Holding {wait / 60:.0f} min until {_stamp(deliver, local_tz)}.")
+    time.sleep(wait)
+    return wait
+
+
+def main():
+    _check_environment()
+
     config = load_config()
     settings = config.get("settings") or {}
     lookback_hours = settings.get("lookback_hours", 24)
     subject_prefix = settings.get("email_subject_prefix", "Daily Digest")
-    local_tz_name = settings.get("timezone", "Australia/Sydney")
-
-    try:
-        local_tz = ZoneInfo(local_tz_name)
-        tz_known = True
-    except Exception:
-        print(f"  [warn] unknown timezone '{local_tz_name}', falling back to UTC", file=sys.stderr)
-        local_tz = timezone.utc
-        tz_known = False
+    local_tz, tz_known = _local_zone(settings)
 
     started = datetime.now(timezone.utc)
     due = None          # when the schedule meant this run to start
@@ -2300,33 +2466,9 @@ def main():
     subject = f"{subject_prefix} - {date_str}"
     check_email_size(html_body)
 
-    amp_body = None
-    if collapsible:
-        amp_body = build_amp(topic_results, date_str, fact)
-        amp_size = len(amp_body.encode("utf-8"))
-        print(f"Collapsible version is {amp_size / 1024:.0f}KB (AMP allows {AMP_MAX_BYTES // 1000}KB)")
-        if amp_size > AMP_MAX_BYTES:
-            print(
-                "  [warn] the collapsible version is over AMP's size limit, so Gmail "
-                "would ignore it. Sending the full version only. Lower max_stories "
-                "in topics.json to bring it back.",
-                file=sys.stderr,
-            )
-            amp_body = None
+    amp_body = _amp_copy(topic_results, date_str, fact) if collapsible else None
 
-    waited = 0
-    if deliver:
-        left = (deliver - datetime.now(timezone.utc)).total_seconds()
-        if left > 0:
-            wait = min(left, MAX_HOLD)
-            if wait < left:
-                print(f"  [warn] deliver_at is {left / 60:.0f} min away, past the {MAX_HOLD // 60} min "
-                      "hold limit, so this run only waits that long.", file=sys.stderr)
-            print(f"Ready early. Holding {wait / 60:.0f} min until {_stamp(deliver, local_tz)}.")
-            time.sleep(wait)
-            waited = wait
-        else:
-            print(f"Ready {_minutes(timedelta(seconds=-left))} min after deliver_at. Sending now.")
+    waited = _hold_until(deliver, local_tz) if deliver else 0
 
     print("Sending email...")
     try:
@@ -2350,5 +2492,518 @@ def main():
     print("Done.")
 
 
+# ---------------------------------------------------------------------------
+# The weekly edition
+# ---------------------------------------------------------------------------
+#
+# Written from the week's saved daily digests, not from the feeds, because
+# most feeds have dropped Monday's items by Sunday. The weekly workflow
+# downloads the saved files into WEEKLY_DIR and runs `digest.py --weekly`.
+
+WEEKLY_DIR = os.environ.get("DIGEST_WEEKLY_DIR", "weekly-input")
+SAVED_NAME = re.compile(r"digest-\d{4}-\d{2}-\d{2}\.json")
+WEEKLY_DAYS = 7
+
+# Characters of each daily story's text given to the model. A provider with a
+# tight token limit gets SNIPPET_CHARS instead.
+WEEKLY_TEXT_CHARS = 700
+
+# Kept low so a full week stays under Gmail's clipping limit.
+WEEKLY_THREAD_SOURCES = 6
+WEEKLY_LINE_SOURCES = 2
+WEEKLY_MAX_ALSO = 8
+WEEKLY_HEADINGS_PER_DAY = 5
+
+
+def _read_saved_digest(path):
+    """(date, sent_at, record) from one saved file, or None with a warning if
+    it can't be used.
+    """
+    try:
+        with open(path, encoding="utf-8") as f:
+            record = json.load(f)
+    except (OSError, ValueError) as e:
+        print(f"  [warn] couldn't read {path}: {e}", file=sys.stderr)
+        return None
+    if not isinstance(record, dict) or not isinstance(record.get("topics"), list):
+        print(f"  [warn] {path} isn't a saved digest, skipping it", file=sys.stderr)
+        return None
+    version = record.get("version")
+    if type(version) is not int or version != SAVED_DIGEST_VERSION:
+        print(f"  [warn] {path} is version {version!r}, and this script reads version "
+              f"{SAVED_DIGEST_VERSION}, so it's skipped", file=sys.stderr)
+        return None
+    try:
+        day = date.fromisoformat(str(record.get("date")))
+    except ValueError:
+        print(f"  [warn] {path} has no readable date, skipping it", file=sys.stderr)
+        return None
+    try:
+        sent_at = datetime.fromisoformat(str(record.get("sent_at")))
+        if sent_at.tzinfo is None:
+            sent_at = sent_at.replace(tzinfo=timezone.utc)
+    except ValueError:
+        sent_at = datetime.min.replace(tzinfo=timezone.utc)
+    return day, sent_at, record
+
+
+def load_saved_digests(folder):
+    """Every saved daily digest under `folder`, as {date: record}.
+
+    The workflow unpacks each artifact into its own subfolder, so subfolders
+    are searched too. When a day was run twice, the file sent last is used.
+    """
+    if not os.path.isdir(folder):
+        print(f"  [warn] there's no {folder} folder, so no saved digests were found", file=sys.stderr)
+        return {}
+    newest = {}
+    for root, dirs, files in os.walk(folder):
+        dirs.sort()
+        for name in sorted(files):
+            if not SAVED_NAME.fullmatch(name):
+                continue
+            loaded = _read_saved_digest(os.path.join(root, name))
+            if loaded is None:
+                continue
+            day, sent_at, record = loaded
+            if day not in newest or sent_at > newest[day][0]:
+                newest[day] = (sent_at, record)
+    return {day: record for day, (_, record) in newest.items()}
+
+
+def week_days(end):
+    """The WEEKLY_DAYS dates that end on `end`, oldest first."""
+    return [end - timedelta(days=n) for n in range(WEEKLY_DAYS - 1, -1, -1)]
+
+
+def _day_name(day):
+    return f"{WEEKDAYS[day.weekday()]} {day.day} {day:%B}"
+
+
+def _join(words):
+    words = list(words)
+    if len(words) < 2:
+        return "".join(words)
+    return ", ".join(words[:-1]) + " and " + words[-1]
+
+
+def week_label(first, last):
+    """The week's dates, as in "12 to 18 October 2026"."""
+    if (first.year, first.month) == (last.year, last.month):
+        return f"{first.day} to {last.day} {last:%B %Y}"
+    if first.year == last.year:
+        return f"{first.day} {first:%B} to {last.day} {last:%B %Y}"
+    return f"{first.day} {first:%B %Y} to {last.day} {last:%B %Y}"
+
+
+def coverage_notice(days, found):
+    """What the email says when some days have no saved digest, or None."""
+    missing = [day for day in days if day not in found]
+    if not missing:
+        return None
+    return (
+        f"This edition covers {len(days) - len(missing)} of {len(days)} days. "
+        f"No digest was saved for {_join(_day_name(day) for day in missing)}."
+    )
+
+
+def _saved_sources(raw):
+    return [
+        {"title": s.get("title"), "link": s.get("link"), "outlet": s.get("outlet")}
+        for s in raw or []
+        if isinstance(s, dict)
+    ]
+
+
+def week_stories(found, days, topic_name):
+    """A topic's stories from the saved days, oldest first, each with its
+    date. A day that only had headlines gives one entry per headline.
+    """
+    stories = []
+    for day in days:
+        record = found.get(day)
+        if not record:
+            continue
+        for saved in record.get("topics") or []:
+            if not isinstance(saved, dict) or saved.get("name") != topic_name:
+                continue
+            for story in saved.get("stories") or []:
+                if not isinstance(story, dict):
+                    continue
+                sources = _saved_sources(story.get("sources"))
+                if saved.get("headlines_only"):
+                    stories += [
+                        {"date": day, "subheading": str(s.get("title") or "").strip(),
+                         "detail": "", "sources": [s], "headline": True}
+                        for s in sources if s.get("title")
+                    ]
+                    continue
+                subheading = str(story.get("subheading") or "").strip()
+                detail = str(story.get("detail") or "").strip()
+                if subheading or detail:
+                    stories.append({"date": day, "subheading": subheading, "detail": detail,
+                                    "sources": sources, "headline": False})
+    return stories
+
+
+def weekly_topic_names(config, found):
+    """The topics.json topics in order, so each keeps its colour, then any
+    topic that's only in the saved files, such as one renamed this week.
+    """
+    names = [topic.get("name") or "Untitled" for topic in config["topics"]]
+    for day in sorted(found):
+        for saved in found[day].get("topics") or []:
+            name = saved.get("name") if isinstance(saved, dict) else None
+            if isinstance(name, str) and name not in names:
+                names.append(name)
+    return names
+
+
+WEEKLY_SYSTEM = """You are a news editor writing a weekly review for a busy \
+general reader. Each request gives you one topic's stories from the past \
+week's daily briefings, as a numbered list. Each entry has its day, its \
+subheading and the text the daily briefing printed. Some entries are bare \
+headlines. Your job is to show what mattered over the week and how the main \
+stories developed.
+
+STRUCTURE
+
+1. "threads" are events that the list covers on two or more different days. \
+Give at most the number the request allows, most significant first. Entries \
+about the same event, decision or dispute belong to one thread, even when \
+different days word it differently.
+2. For each thread, fill "story_ids" first, with every entry the thread \
+draws on and no others. "heading" says plainly what the thread is about, in \
+under 10 words. "narrative" is 2-3 short paragraphs separated by a blank \
+line: how it started, what changed during the week, and where it stands at \
+the end. Name the days, as in "On Tuesday".
+3. "also" holds the other stories worth knowing, one line each: events the \
+list covers on one day only. Fill "story_ids" first. "line" is one sentence \
+of at most 20 words. Leave out minor stories.
+4. "overview" is 3-4 sentences on what mattered most in this topic over the \
+week. Someone who reads only the overview should know the week's main \
+points. Do not restate the headings one by one.
+
+LANGUAGE
+
+5. Keep sentences short. Average about 15-20 words and never run past 25. \
+One idea per sentence.
+6. Use the active voice and everyday words.
+
+ACCURACY
+
+7. Use only the numbered entries. They are summaries written earlier in the \
+week. Add nothing from outside knowledge, even to fill a gap or explain a \
+cause.
+8. When a later day corrects or updates an earlier one, use the later \
+version and say what changed, as in "Monday's count of 40 was revised to 52 \
+on Wednesday."
+9. Where entries disagree and no later one settles it, say so briefly.
+10. Stay neutral, and attribute claims to whoever made them.
+11. Never invent an id, and cite only entries that support what you wrote."""
+
+_STORY_IDS = {
+    "type": "ARRAY",
+    "description": "Ids of the numbered entries this draws on, chosen before the text, per rule 11.",
+    "items": {"type": "INTEGER"},
+}
+
+WEEKLY_SCHEMA = {
+    "type": "OBJECT",
+    "description": "One week's review of a single news topic.",
+    "properties": {
+        "threads": {
+            "type": "ARRAY",
+            "description": "Events covered on two or more days, most significant first, per rule 1.",
+            "items": {
+                "type": "OBJECT",
+                "properties": {
+                    "story_ids": _STORY_IDS,
+                    "heading": {"type": "STRING", "description": "Under 10 words, per rule 2."},
+                    "narrative": {
+                        "type": "STRING",
+                        "description": "2-3 short paragraphs: start, change, where it stands. Rule 2.",
+                    },
+                },
+                "propertyOrdering": ["story_ids", "heading", "narrative"],
+                "required": ["story_ids", "heading", "narrative"],
+            },
+        },
+        "also": {
+            "type": "ARRAY",
+            "description": "One-line stories from a single day, per rule 3.",
+            "items": {
+                "type": "OBJECT",
+                "properties": {
+                    "story_ids": _STORY_IDS,
+                    "line": {"type": "STRING", "description": "One sentence, at most 20 words."},
+                },
+                "propertyOrdering": ["story_ids", "line"],
+                "required": ["story_ids", "line"],
+            },
+        },
+        "overview": {
+            "type": "STRING",
+            "description": "3-4 sentences on the week, written last, per rule 4.",
+        },
+    },
+    "propertyOrdering": ["threads", "also", "overview"],
+    "required": ["threads", "also", "overview"],
+}
+
+
+def _cited_stories(story_ids, by_id, label):
+    """The saved stories an entry cited, in date order. Unknown ids are dropped."""
+    cited = {}
+    if not isinstance(story_ids, list):
+        return []
+    for raw in story_ids:
+        story_id = _as_article_id(raw)
+        if story_id is None or story_id in cited:
+            continue
+        if story_id not in by_id:
+            print(f"  [warn] cited unknown story_id {story_id} for {label}; dropping", file=sys.stderr)
+            continue
+        cited[story_id] = by_id[story_id]
+    return [cited[i] for i in sorted(cited)]
+
+
+def _week_sources(cited, cap):
+    """Links for a thread or line, copied from the saved stories it cites. One
+    from each story comes first, so every day keeps a link.
+    """
+    firsts = [s["sources"][0] for s in cited if s["sources"]]
+    rest = [src for s in cited for src in s["sources"][1:]]
+    picked, seen = [], set()
+    for src in firsts + rest:
+        key = src.get("link") or src.get("title")
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        picked.append(dict(src))
+        if len(picked) == cap:
+            break
+    return picked
+
+
+def summarize_week(topic_name, stories, max_threads):
+    """One topic's weekly review, from the first model that answers.
+
+    The model cites the saved stories by number, and the links are copied
+    from those stories, so it can't invent a URL. The days a thread ran are
+    named by the script. Returns None or
+    {overview, stories: [threads], also: [{line, sources}]}.
+    """
+    if not stories:
+        return None
+    by_id = {i: s for i, s in enumerate(stories, start=1)}
+    label = f"{topic_name} (weekly)"
+
+    def build_prompt(cap):
+        # Every story goes in for every provider, so an id means the same story
+        # whichever model answers. A tighter provider gets shorter text.
+        chars = WEEKLY_TEXT_CHARS if cap >= MAX_ARTICLES_PER_TOPIC else SNIPPET_CHARS
+        numbered = []
+        for i, s in by_id.items():
+            entry = {"id": i, "day": _day_name(s["date"]), "subheading": s["subheading"]}
+            if s["headline"]:
+                entry["headline_only"] = True
+            else:
+                entry["text"] = s["detail"][:chars]
+            numbered.append(entry)
+        data = (
+            json.dumps(numbered, ensure_ascii=False)
+            .replace("<", "\\u003c")
+            .replace(">", "\\u003e")
+        )
+        days = len({s["date"] for s in stories})
+        return f"""<stories topic="{html.escape(topic_name, quote=True)}" days="{days}">
+{data}
+</stories>
+
+The entries above are in date order, oldest first.
+
+Based only on the entries above, write this week's "{topic_name}" review per
+your instructions. Give at most {max_threads} threads, each drawn from
+entries on two or more different days, then the one-line stories. Keep the
+sentences short and plain, per rule 5.
+"""
+
+    reply = run_chain(build_prompt, WEEKLY_SYSTEM, WEEKLY_SCHEMA, label)
+    if not isinstance(reply, dict):
+        if reply is not None:
+            print(f"  [warn] model returned non-object JSON for {label}", file=sys.stderr)
+        return None
+
+    threads, also = [], []
+    for entry in reply.get("threads") or []:
+        if not isinstance(entry, dict):
+            continue
+        cited = _cited_stories(entry.get("story_ids"), by_id, label)
+        heading = str(entry.get("heading") or "").strip()
+        narrative = str(entry.get("narrative") or "").strip()
+        if not cited or not (heading or narrative):
+            continue
+        days = sorted({s["date"] for s in cited})
+        if len(days) < 2 or len(threads) >= max_threads:
+            # A thread needs two days and fits under the limit. Anything else
+            # becomes a one-line story.
+            also.append({"line": heading or _story_label({"detail": narrative}),
+                         "sources": _week_sources(cited, WEEKLY_LINE_SOURCES)})
+            continue
+        threads.append({
+            "subheading": f"{heading} · {_join(WEEKDAYS[d.weekday()][:3] for d in days)}"
+                          if heading else _join(WEEKDAYS[d.weekday()] for d in days),
+            "detail": narrative,
+            "sources": _week_sources(cited, WEEKLY_THREAD_SOURCES),
+        })
+
+    for entry in reply.get("also") or []:
+        if not isinstance(entry, dict):
+            continue
+        cited = _cited_stories(entry.get("story_ids"), by_id, label)
+        line = str(entry.get("line") or "").strip()
+        if cited and line:
+            also.append({"line": line, "sources": _week_sources(cited, WEEKLY_LINE_SOURCES)})
+
+    overview = str(reply.get("overview") or "").strip()
+    if not threads and not also and not overview:
+        print(f"  [warn] empty weekly review for {topic_name}", file=sys.stderr)
+        return None
+    return {"overview": overview, "stories": threads, "also": also[:WEEKLY_MAX_ALSO]}
+
+
+def headings_by_day(stories):
+    """The week's story headings for a topic no model could review, grouped by
+    day, each linked to the first source its story cited. Marked degraded so
+    the email labels it.
+    """
+    by_day = {}
+    for s in stories:
+        first = s["sources"][0] if s["sources"] else {}
+        heading = s["subheading"] or first.get("title")
+        if heading and len(by_day.setdefault(s["date"], [])) < WEEKLY_HEADINGS_PER_DAY:
+            by_day[s["date"]].append(
+                {"title": heading, "link": first.get("link"), "outlet": first.get("outlet")}
+            )
+    if not by_day:
+        return None
+    return {
+        "overview": None,
+        "degraded": True,
+        "stories": [
+            {"subheading": _day_name(day), "detail": None, "sources": items}
+            for day, items in sorted(by_day.items())
+        ],
+    }
+
+
+def weekly_main(folder=WEEKLY_DIR, any_day=False):
+    """Send the weekly edition, if it's on and today is its day."""
+    _check_environment()
+
+    config = load_config()
+    settings = config.get("settings") or {}
+    weekly = config.get("weekly") or {}
+    if not weekly.get("enabled", False):
+        print('The weekly edition is off. Set "enabled": true in the "weekly" block of '
+              "topics.json to turn it on.")
+        return
+
+    local_tz, tz_known = _local_zone(settings)
+    today = datetime.now(local_tz).date()
+    send_day = weekly.get("day", "Sunday").strip().title()
+    if WEEKDAYS[today.weekday()] != send_day and not any_day:
+        print(f"Today is {WEEKDAYS[today.weekday()]}, and the weekly edition goes out on "
+              f"{send_day}. Nothing to send.")
+        return
+
+    days = week_days(today)
+    label = week_label(days[0], days[-1])
+    records = load_saved_digests(folder)
+    found = {day: records[day] for day in days if day in records}
+    missing = [_day_name(day) for day in days if day not in found]
+    print(f"Found saved digests for {len(found)} of {len(days)} days ({label})."
+          + (f" Missing: {_join(missing)}." if missing else ""))
+    if not found:
+        print(f"ERROR: no saved daily digest for {label}, so no weekly email is sent. "
+              "Check that the daily runs uploaded their 'daily-digest' artifacts and that "
+              "the download step found them.", file=sys.stderr)
+        sys.exit(1)
+
+    max_threads = weekly.get("max_threads", 3)
+    topic_results = []
+    start_budget()
+    for name in weekly_topic_names(config, found):
+        stories = week_stories(found, days, name)
+        n_days = len({s["date"] for s in stories})
+        print(f"Weekly review for topic: {name} ({len(stories)} stories over "
+              f"{_plural(n_days, 'day', 'days')})")
+        if not stories:
+            topic_results.append((name, None, None))
+            continue
+        try:
+            brief = summarize_week(name, stories, max_threads)
+        except Exception as e:
+            print(f"  [error] weekly review failed for '{name}': {e}", file=sys.stderr)
+            brief = None
+        if brief:
+            print(f"  got {len(brief['stories'])} threads and {len(brief['also'])} one-line stories")
+        else:
+            brief = headings_by_day(stories)
+            print("  no review; listing the week's headings by day instead")
+        topic_results.append((name, brief, None))
+
+        # Pause between topics for the free tier's rate limits.
+        with _outside_budget():
+            time.sleep(2)
+
+    print(f"Model time used: {TOTAL_BUDGET - _budget_left():.0f}s of {TOTAL_BUDGET}s")
+
+    if not any(brief for _, brief, _ in topic_results):
+        print(f"ERROR: the saved digests for {label} hold no stories, so no weekly email is sent.",
+              file=sys.stderr)
+        sys.exit(1)
+
+    notices = [text for text in [coverage_notice(days, found)] if text]
+    collapsible = settings.get("collapsible_stories", True)
+    html_body = build_html(topic_results, label, None, collapsible, WEEKLY, notices)
+    subject = f"{weekly.get('email_subject_prefix', 'Weekly Digest')} - {label}"
+    check_email_size(html_body)
+    amp_body = _amp_copy(topic_results, label, None, WEEKLY, notices) if collapsible else None
+
+    # The weekly run starts when the daily run ends. deliver_at only holds a run
+    # started that way, so a run by hand sends at once.
+    deliver_at = weekly.get("deliver_at")
+    if deliver_at and tz_known and os.environ.get("GITHUB_EVENT_NAME") == "workflow_run":
+        hour, minute = (int(part) for part in deliver_at.split(":"))
+        _hold_until(_local_time_on(today, hour, minute, local_tz), local_tz)
+
+    print("Sending the weekly email...")
+    try:
+        send_email(subject, html_body, amp_body)
+    except Exception as e:
+        print(f"ERROR: failed to send email: {e}", file=sys.stderr)
+        sys.exit(1)
+    print(f"Sent the weekly edition at {_stamp(datetime.now(timezone.utc), local_tz)}.")
+    print("Done.")
+
+
+def cli(argv=None):
+    parser = argparse.ArgumentParser(
+        description="Send the daily digest, or with --weekly the weekly edition.")
+    parser.add_argument("--weekly", action="store_true",
+                        help="send the weekly edition, written from the saved daily digests")
+    parser.add_argument("--from", dest="folder", default=WEEKLY_DIR,
+                        help="folder that holds the saved digests (default: %(default)s)")
+    parser.add_argument("--any-day", action="store_true",
+                        help="send the weekly edition even if today isn't its day")
+    args = parser.parse_args(argv)
+    if args.weekly:
+        weekly_main(args.folder, args.any_day)
+    else:
+        main()
+
+
 if __name__ == "__main__":
-    main()
+    cli()
