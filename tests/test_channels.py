@@ -23,7 +23,7 @@ class Chat(list):
 def chat(monkeypatch):
     box = Chat()
 
-    def send(message):
+    def send(message, channel):
         if box.fail:
             raise box.fail
         box.append(message)
@@ -157,7 +157,7 @@ def test_channels_are_sent_in_the_order_listed(write_config, mail_env, fake_pipe
                                                capsys):
     order = []
     monkeypatch.setattr(digest, "send_email", lambda *args: order.append("email"))
-    monkeypatch.setitem(channels.CHANNELS["chat"], "send", lambda message: order.append("chat"))
+    monkeypatch.setitem(channels.CHANNELS["chat"], "send", lambda message, channel: order.append("chat"))
     write_config(with_channels(config(topic("Tech")), "chat", "email"))
     digest.main()
     assert order == ["chat", "email"]

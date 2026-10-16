@@ -10,18 +10,27 @@ import os
 import sys
 
 from digestlib.channels.email import send_email
+from digestlib.channels.telegram import send_telegram
 
 EDITIONS = ("daily", "weekly")
 
 # type -> what the channel needs. "needs" must be set before the run starts.
 # "secrets" are hidden in any line the run prints. "html" says the channel
-# sends the HTML email, so the run only builds it when one does.
+# sends the HTML email, so the run only builds it when one does. "send" takes
+# the message and the channel's entry in the "channels" list.
 CHANNELS = {
     "email": {
         "needs": ("GMAIL_ADDRESS", "GMAIL_APP_PASSWORD"),
         "secrets": ("GMAIL_APP_PASSWORD",),
         "html": True,
-        "send": lambda message: send_email(message["subject"], message["html"], message["amp"]),
+        "send": lambda message, channel: send_email(message["subject"], message["html"],
+                                                    message["amp"]),
+    },
+    "telegram": {
+        "needs": ("TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID"),
+        "secrets": ("TELEGRAM_BOT_TOKEN",),
+        "html": False,
+        "send": lambda message, channel: send_telegram(message, channel.get("story_text", False)),
     },
 }
 
@@ -71,7 +80,7 @@ def send_to_channels(channels, message):
         kind = channel["type"]
         print(f"Sending to {kind}...")
         try:
-            CHANNELS[kind]["send"](message)
+            CHANNELS[kind]["send"](message, channel)
         except Exception as e:
             print(f"  [error] {kind} failed: {hide_secrets(e)}", file=sys.stderr)
             failed.append(kind)

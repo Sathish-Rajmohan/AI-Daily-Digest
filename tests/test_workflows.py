@@ -28,7 +28,8 @@ def script_source():
     return "\n".join(path.read_text(encoding="utf-8") for path in paths)
 
 # Every environment variable digest.py reads, split by who sets it.
-SECRETS = {"GEMINI_API_KEY", "GROQ_API_KEY", "GMAIL_ADDRESS", "GMAIL_APP_PASSWORD", "RECIPIENT_EMAIL"}
+SECRETS = {"GEMINI_API_KEY", "GROQ_API_KEY", "GMAIL_ADDRESS", "GMAIL_APP_PASSWORD", "RECIPIENT_EMAIL",
+           "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID"}
 OPTIONAL_OVERRIDES = {"GEMINI_MODELS", "GEMINI_MODEL", "GROQ_MODELS", "DIGEST_CONFIG_PATH",
                       "DIGEST_SCHEDULE_TZ", "DIGEST_SAVE_DIR", "DIGEST_WEEKLY_DIR"}
 # How the script learns which trigger started it. Actions sets the first, and

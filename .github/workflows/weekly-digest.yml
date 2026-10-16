@@ -78,6 +78,10 @@ jobs:
           GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
           RECIPIENT_EMAIL: ${{ secrets.RECIPIENT_EMAIL }}
+          # Chat channels. Each is used only when the channels list in
+          # topics.json names it.
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           DIGEST_WEEKLY_DIR: weekly-input
           # True only for a manual run with the box ticked.
           ANY_DAY: ${{ inputs.any_day && '--any-day' || '' }}
