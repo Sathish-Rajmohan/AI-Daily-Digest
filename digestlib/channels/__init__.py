@@ -12,6 +12,7 @@ from urllib.parse import urlsplit
 
 from digestlib.channels.discord import send_discord
 from digestlib.channels.email import send_email
+from digestlib.channels.slack import send_slack
 from digestlib.channels.telegram import send_telegram
 
 EDITIONS = ("daily", "weekly")
@@ -39,6 +40,12 @@ CHANNELS = {
         "secrets": ("DISCORD_WEBHOOK_URL",),
         "html": False,
         "send": lambda message, channel: send_discord(message, channel.get("story_text", False)),
+    },
+    "slack": {
+        "needs": ("SLACK_WEBHOOK_URL",),
+        "secrets": ("SLACK_WEBHOOK_URL",),
+        "html": False,
+        "send": lambda message, channel: send_slack(message, channel.get("story_text", False)),
     },
 }
 
