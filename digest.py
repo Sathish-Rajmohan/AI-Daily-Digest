@@ -31,6 +31,10 @@ from dateutil import parser as dateparser
 
 CONFIG_PATH = os.environ.get("DIGEST_CONFIG_PATH", "topics.json")
 
+# Where each run keeps a copy of what it sent, for the weekly edition. The
+# workflow uploads this folder as an artifact.
+SAVE_DIR = os.environ.get("DIGEST_SAVE_DIR", "saved-digests")
+
 # Actions pipes stdout, which Python buffers, while stderr isn't buffered.
 # Line buffering keeps progress lines and warnings in the order they happened.
 sys.stdout.reconfigure(line_buffering=True)
@@ -2075,6 +2079,65 @@ def _stamp(moment, tz):
     return moment.astimezone(tz).strftime("%a %d %b %H:%M %Z")
 
 
+# Raised when a later change to the saved file would break a reader of the
+# older ones.
+SAVED_DIGEST_VERSION = 1
+
+
+def digest_record(topic_results, day, fact, sent_at, scheduled):
+    """What the email said, as plain data: each topic's overview and stories
+    with the sources they cite, and the fact. Nothing else from the run goes
+    in, so the file holds no more than the email did.
+    """
+    topics = []
+    for name, brief, notice in topic_results:
+        entry = {"name": name, "overview": None, "headlines_only": False, "stories": []}
+        if brief:
+            entry["overview"] = brief.get("overview")
+            entry["headlines_only"] = bool(brief.get("degraded"))
+            entry["stories"] = [
+                {
+                    "subheading": story.get("subheading"),
+                    "detail": story.get("detail"),
+                    "sources": [
+                        {"title": s.get("title"), "link": s.get("link"), "outlet": s.get("outlet")}
+                        for s in story.get("sources") or []
+                    ],
+                }
+                for story in brief.get("stories") or []
+            ]
+        if notice:
+            entry["notice"] = notice
+        topics.append(entry)
+    return {
+        "version": SAVED_DIGEST_VERSION,
+        "date": day.isoformat(),
+        "sent_at": sent_at.astimezone(timezone.utc).isoformat(timespec="seconds"),
+        "trigger": "schedule" if scheduled else "manual",
+        "topics": topics,
+        "fact": fact,
+    }
+
+
+def save_digest(record):
+    """Write the record to SAVE_DIR as digest-<date>.json, replacing an earlier
+    run's file for the same day. The email has already gone, so a failure here
+    is only logged.
+    """
+    path = os.path.join(SAVE_DIR, f"digest-{record['date']}.json")
+    try:
+        # Encoded before the file is opened, so a failure can't leave half a file.
+        text = json.dumps(record, ensure_ascii=False, indent=1)
+        os.makedirs(SAVE_DIR, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(text)
+    except (OSError, TypeError, ValueError) as e:
+        print(f"  [warn] couldn't save this digest for the weekly edition: {e}", file=sys.stderr)
+        return None
+    print(f"Saved this digest to {path}")
+    return path
+
+
 def main():
     missing = [k for k in ("GMAIL_ADDRESS", "GMAIL_APP_PASSWORD") if not os.environ.get(k)]
     if missing:
@@ -2272,6 +2335,8 @@ def main():
         print(f"ERROR: failed to send email: {e}", file=sys.stderr)
         sys.exit(1)
     sent = datetime.now(timezone.utc)
+
+    save_digest(digest_record(topic_results, now_local.date(), fact, sent, scheduled_run))
 
     # One line per run that says how late it started, how long it waited and
     # when it sent, so the logs can be compared run to run.

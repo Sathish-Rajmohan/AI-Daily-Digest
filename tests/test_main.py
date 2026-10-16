@@ -1,8 +1,10 @@
 """main(): the whole run, from config to a sent email."""
 
 import email
+import json
 import re
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 
@@ -308,6 +310,115 @@ def test_send_failure_exits_non_zero(write_config, mail_env, fake_pipeline, monk
         digest.main()
     assert exit_info.value.code == 1
     assert "535" in capsys.readouterr().err
+
+
+# --------------------------------------------------------------------------
+# Saving the digest for the weekly edition
+# --------------------------------------------------------------------------
+
+def saved_files():
+    return sorted(Path(digest.SAVE_DIR).glob("*.json"))
+
+
+def read_saved():
+    [path] = saved_files()
+    return path, json.loads(path.read_text(encoding="utf-8"))
+
+
+def test_a_sent_digest_is_saved_with_what_the_email_said(write_config, mail_env, sent, fake_pipeline,
+                                                         capsys):
+    write_config(config(topic("Tech"), topic("World")))
+    digest.main()
+
+    path, saved = read_saved()
+    today = datetime.now(timezone.utc).date().isoformat()
+    assert path.name == f"digest-{today}.json"
+    assert saved["version"] == 1 and saved["date"] == today and saved["trigger"] == "manual"
+    assert [t["name"] for t in saved["topics"]] == ["Tech", "World"]
+    tech = saved["topics"][0]
+    assert tech["overview"] == "Tech overview." and tech["headlines_only"] is False
+    assert tech["stories"] == written_brief("Tech")["stories"]
+    assert saved["fact"] == fake_pipeline.fact
+    assert f"Saved this digest to {path}" in capsys.readouterr().out
+
+
+def test_headlines_and_skipped_topics_are_saved_as_the_email_showed_them(write_config, mail_env, sent,
+                                                                        fake_pipeline):
+    fake_pipeline.summaries = {"World": None}
+    fake_pipeline.articles = {"Sport": RuntimeError("all feeds down")}
+    write_config(config(topic("Tech"), topic("World"), topic("Sport")))
+    digest.main()
+
+    _, saved = read_saved()
+    _, world, sport = saved["topics"]
+    assert world["headlines_only"] is True and world["overview"] is None
+    [headlines] = world["stories"]
+    assert headlines["subheading"] is None and len(headlines["sources"]) == 3
+    assert sport["stories"] == [] and sport["notice"] == "its feeds couldn't be fetched this run"
+    assert "notice" not in world
+
+
+def test_a_scheduled_run_is_marked_as_one(write_config, mail_env, sent, fake_pipeline, monkeypatch):
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "schedule")
+    monkeypatch.setenv("DIGEST_SCHEDULE", "17 8 * * *")
+    write_config(config(topic("Tech")))
+    digest.main()
+    assert read_saved()[1]["trigger"] == "schedule"
+
+
+def test_a_digest_that_was_not_sent_is_not_saved(write_config, mail_env, fake_pipeline, monkeypatch):
+    def refuse(subject, body, amp_body=None):
+        raise OSError("535 Username and Password not accepted")
+    monkeypatch.setattr(digest, "send_email", refuse)
+    write_config(config(topic("Tech")))
+    with pytest.raises(SystemExit):
+        digest.main()
+    assert saved_files() == []
+
+
+def test_a_failed_save_is_logged_and_the_run_still_finishes(write_config, mail_env, sent, fake_pipeline,
+                                                            monkeypatch, tmp_path, capsys):
+    # A file where the folder should be makes the save fail.
+    blocker = tmp_path / "not-a-folder"
+    blocker.write_text("x", encoding="utf-8")
+    monkeypatch.setattr(digest, "SAVE_DIR", str(blocker))
+    write_config(config(topic("Tech")))
+    digest.main()
+
+    out = capsys.readouterr()
+    assert len(sent) == 1
+    assert "couldn't save this digest" in out.err
+    assert "Done." in out.out
+
+
+def test_a_second_run_on_the_same_day_replaces_the_first(write_config, mail_env, sent, fake_pipeline):
+    write_config(config(topic("Tech")))
+    digest.main()
+    fake_pipeline.summaries = {"Tech": {"overview": "Later overview.", "stories": []}}
+    digest.main()
+
+    _, saved = read_saved()
+    assert saved["topics"][0]["overview"] == "Later overview."
+
+
+def test_the_saved_record_holds_only_what_the_email_shows():
+    brief = {
+        "overview": "Overview.",
+        "model": "gemini/gem-a",
+        "stories": [{"subheading": "Lead", "detail": "Detail.", "article_ids": [1],
+                     "sources": [{"title": "T", "link": "https://x.example/1", "outlet": "X",
+                                  "summary": "feed text the email never showed"}]}],
+    }
+    record = digest.digest_record([("Tech", brief, None)], datetime(2026, 10, 18).date(), None,
+                                  datetime(2026, 10, 17, 22, 5, tzinfo=timezone.utc), False)
+    assert record["topics"] == [{
+        "name": "Tech", "overview": "Overview.", "headlines_only": False,
+        "stories": [{"subheading": "Lead", "detail": "Detail.",
+                     "sources": [{"title": "T", "link": "https://x.example/1", "outlet": "X"}]}],
+    }]
+    assert record["date"] == "2026-10-18"
+    assert record["sent_at"] == "2026-10-17T22:05:00+00:00"
+    assert record["fact"] is None
 
 
 # --------------------------------------------------------------------------

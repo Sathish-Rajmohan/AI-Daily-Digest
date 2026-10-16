@@ -285,12 +285,15 @@ SAMPLE_FACT = {
 # --------------------------------------------------------------------------
 
 @pytest.fixture(autouse=True)
-def isolated(monkeypatch):
+def isolated(monkeypatch, tmp_path_factory):
     """
     Every test starts from the same module state: a fake clock, a known
     model chain with only Gemini configured, no leftover dropped models or
-    disabled providers, no running budget, and no network.
+    disabled providers, no running budget, no network, and saved digests
+    kept in the test's own folder.
     """
+    # Not tmp_path, whose name repeats the test's name in every logged path.
+    monkeypatch.setattr(digest, "SAVE_DIR", str(tmp_path_factory.mktemp("saved") / "saved-digests"))
     clock = FakeClock()
     monkeypatch.setattr(digest, "time", types.SimpleNamespace(
         monotonic=clock.monotonic, sleep=clock.sleep))

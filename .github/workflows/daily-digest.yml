@@ -48,3 +48,15 @@ jobs:
           # topics.json, such as a UTC cron entry with no timezone key.
           # DIGEST_SCHEDULE_TZ: "UTC"
         run: python digest.py
+
+      # The script saves what it sent to saved-digests/ once the email has
+      # gone. The weekly edition is written from these files. Anyone signed in
+      # to GitHub can download an artifact from a public repo, so the file holds
+      # only what was in the email.
+      - name: Keep this digest for the weekly edition
+        uses: actions/upload-artifact@v7
+        with:
+          name: daily-digest
+          path: saved-digests/
+          retention-days: 14
+          if-no-files-found: warn

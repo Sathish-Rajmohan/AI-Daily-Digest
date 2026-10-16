@@ -24,7 +24,7 @@ WORKFLOWS = ROOT / ".github" / "workflows"
 # Every environment variable digest.py reads, split by who sets it.
 SECRETS = {"GEMINI_API_KEY", "GROQ_API_KEY", "GMAIL_ADDRESS", "GMAIL_APP_PASSWORD", "RECIPIENT_EMAIL"}
 OPTIONAL_OVERRIDES = {"GEMINI_MODELS", "GEMINI_MODEL", "GROQ_MODELS", "DIGEST_CONFIG_PATH",
-                      "DIGEST_SCHEDULE_TZ"}
+                      "DIGEST_SCHEDULE_TZ", "DIGEST_SAVE_DIR"}
 # How the script learns which trigger started it. Actions sets the first, and
 # the workflow passes the second.
 RUN_CONTEXT = {"GITHUB_EVENT_NAME", "DIGEST_SCHEDULE"}
@@ -183,6 +183,21 @@ def test_topics_file_the_workflow_uses_is_where_the_script_looks():
     path = result.stdout.strip().splitlines()[-1]
     assert path == "topics.json"
     assert (ROOT / path).is_file()
+
+
+def test_the_saved_digest_is_uploaded_after_the_run_and_kept_two_weeks(digest_workflow):
+    job_steps = steps(digest_workflow, "send-digest")
+    upload = next(s for s in job_steps if s.get("uses", "").startswith("actions/upload-artifact@"))
+    assert job_steps.index(upload) > job_steps.index(run_step(digest_workflow))
+    # A one-week edition needs a week of files, with room for a late run.
+    assert upload["with"]["retention-days"] == 14
+    # A run whose save failed has still sent its email, so it stays green.
+    assert upload["with"]["if-no-files-found"] == "warn"
+
+    env = {k: v for k, v in os.environ.items() if k != "DIGEST_SAVE_DIR"}
+    result = subprocess.run([sys.executable, "-c", "import digest; print(digest.SAVE_DIR)"],
+                            cwd=ROOT, env=env, capture_output=True, text=True, check=True)
+    assert upload["with"]["path"].rstrip("/") == result.stdout.strip().splitlines()[-1]
 
 
 # --------------------------------------------------------------------------

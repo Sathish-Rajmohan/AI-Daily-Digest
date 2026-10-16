@@ -316,3 +316,21 @@ clickable, and anything else, such as a `javascript:` or relative link, is
 shown as plain text. In the prompt, the article list sits inside a tag with
 any angle brackets in headlines escaped, so text from a feed can't pass itself
 off as an instruction.
+
+## What each run keeps
+
+Once the email has gone, the run saves what it said as one JSON file,
+`saved-digests/digest-<date>.json`. The file holds each topic's overview and
+stories, the title, link and outlet of each source, and the fact. A topic that
+fell back to headlines is marked as one, and a skipped topic keeps its notice.
+Nothing else from the run goes in: no feed text the email didn't show, and no
+address.
+
+The workflow uploads the folder as an artifact called `daily-digest` and keeps
+it for 14 days. A weekly edition will be written from these files, because by
+the end of a week most feeds no longer hold Monday's articles.
+
+A run whose email fails to send saves nothing. A save that fails is logged,
+and the run still ends normally, since the email is already out. A second run
+on the same day replaces that day's file. A local run writes the same file,
+and git ignores the folder.

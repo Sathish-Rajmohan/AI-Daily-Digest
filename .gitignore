@@ -15,6 +15,9 @@ Thumbs.db
 .vscode/
 .idea/
 
+# Digests a local run saved for the weekly edition
+saved-digests/
+
 # Test runs
 .pytest_cache/
 .coverage

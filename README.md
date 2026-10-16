@@ -442,6 +442,11 @@ the model follows.
 Keep keys out of the repo and store them only as Actions secrets. Anyone can
 see `topics.json` in a public repo, but secrets stay hidden.
 
+Each run keeps a copy of its digest as an artifact for 14 days. Anyone signed
+in to GitHub can download artifacts from a public repo. The copy holds only
+what the email showed, with no address or key. See
+[HOW-IT-WORKS.md](HOW-IT-WORKS.md#what-each-run-keeps).
+
 Treat the App Password like your Google password, because it can sign in to
 your account through mail apps. You can revoke it from your Google Account at
 any time without changing your main password. A second Gmail account used only
