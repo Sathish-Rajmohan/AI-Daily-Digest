@@ -1,0 +1,30 @@
+name: Schedule probe
+
+# Temporary. It measures how late GitHub starts scheduled runs, and sends
+# nothing. Each run's title names the cron entry that started it, so the start
+# can be compared with the time the entry was due.
+#
+# Entries 1 and 2 are the same instant, 21:17 UTC, which is 8:17 AM in Sydney
+# until April. One is written in UTC and the other uses the timezone key that
+# the digest and keepalive use. If the key slows the start, entry 2 starts
+# later than entry 1 on the same days. Entries 3 and 4 are other times of day,
+# to see whether the hour matters.
+#
+# Delete this file once the question is answered.
+run-name: probe ${{ github.event.schedule || 'manual' }}
+
+on:
+  schedule:
+    - cron: "17 21 * * *"
+    - cron: "17 8 * * *"
+      timezone: "Australia/Sydney"
+    - cron: "17 14 * * *"
+    - cron: "17 3 * * *"
+  workflow_dispatch: {}
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - run: echo "started $(date -u +%FT%TZ) for ${{ github.event.schedule || 'manual' }}"
