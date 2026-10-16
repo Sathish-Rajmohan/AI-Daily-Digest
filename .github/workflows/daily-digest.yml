@@ -16,8 +16,8 @@ jobs:
     runs-on: ubuntu-latest
     # A worst-case run takes about 30 minutes: every feed timing out, the
     # full 15-minute model budget (TOTAL_BUDGET), then sending. On top of that
-    # a run can wait up to 3 hours for deliver_at (MAX_HOLD in digest.py), so
-    # the limit is 35 + 180 minutes. It still stops a stuck run well before
+    # a run can wait up to 3 hours for deliver_at (MAX_HOLD in
+    # digestlib/schedule.py), so the limit is 35 + 180 minutes. It still stops a stuck run well before
     # GitHub's default of 6 hours.
     timeout-minutes: 215
     steps:

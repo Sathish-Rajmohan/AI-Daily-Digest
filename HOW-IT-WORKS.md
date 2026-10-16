@@ -219,7 +219,7 @@ and the cost is a small overlap. The window still reaches up to the real start,
 so nothing published before the run began is missed. Anything published after the
 start is left out of that day's email, however long the run then waits.
 
-Waiting is capped at 3 hours (`MAX_HOLD` in `digest.py`). The workflow's
+Waiting is capped at 3 hours (`MAX_HOLD` in `digestlib/schedule.py`). The workflow's
 `timeout-minutes` is 215, which is the longest run (about 29 minutes of slow
 feeds, the full model budget and sending) plus that cap, and a test checks it.
 A run waiting in a private repo uses Actions minutes.

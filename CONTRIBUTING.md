@@ -19,8 +19,31 @@ To see which lines the tests reach:
 
 ```bash
 pip install pytest-cov
-python -m pytest --cov=digest --cov-branch --cov-report=term-missing
+python -m pytest --cov=digest --cov=digestlib --cov-branch --cov-report=term-missing
 ```
+
+## Where the code is
+
+`digest.py` is the script the workflows run. It holds `main()`, the weekly
+edition's `weekly_main()` and the command line. The rest is in `digestlib/`,
+one module per job:
+
+| Module | What it does |
+|---|---|
+| `config.py` | Reads `topics.json` and checks it for mistakes |
+| `schedule.py` | Works out when a run was due and when to send, and holds until then |
+| `feeds.py` | Fetches the feeds and picks the articles for each topic |
+| `models.py` | Calls the models: the chain, retries, the time budget and 429 lines |
+| `briefing.py` | The prompts and schemas for the briefing and the fact of the day |
+| `render.py` | The HTML email for both editions, and the Gmail size check |
+| `amp.py` | The AMP copy that folds in Gmail |
+| `channels/email.py` | Sends the email through Gmail |
+| `saved.py` | Saves each day's digest and reads the saved ones back |
+| `weekly.py` | The weekly edition's days, stories, prompt and schema |
+
+The tests import `digest`, and a name patched on `digest` also changes in
+every `digestlib` module that has it. A new test can patch the module
+directly instead.
 
 ## Checking the schedule
 
@@ -52,9 +75,10 @@ Some mistakes in the email code don't raise an error. The email still sends,
 but part of it stops working.
 
 - Gmail falls back to the regular email if the AMP version breaks any AMP rule.
-  After changing `build_amp()`, save a generated copy to a file and run
+  After changing `build_amp()` in `digestlib/amp.py`, save a generated copy to a file and run
   `npx amphtml-validator --html_format AMP4EMAIL <file>`.
-- Font names in `_FONT_STACK` and `_SERIF_STACK` need single quotes. The stacks
+- Font names in `_FONT_STACK` and `_SERIF_STACK` (in `digestlib/render.py`)
+  need single quotes. The stacks
   go inside double-quoted `style` attributes, where a double quote ends the
   attribute and the font is dropped for the whole email.
   `test_font_stacks_survive_inside_style_attributes` catches this.
@@ -68,7 +92,7 @@ but part of it stops working.
 
 ## Adding a model provider
 
-`run_chain()` in `digest.py` tries each `(provider, model)` pair from
+`run_chain()` in `digestlib/models.py` tries each `(provider, model)` pair from
 `build_model_chain()` in order. A provider needs two functions:
 
 - `_yourprovider_request(model, prompt, system, schema)` returns
@@ -79,7 +103,8 @@ but part of it stops working.
 Register both in `_PROVIDERS` and add the provider's models to
 `build_model_chain()`. Retries, the time budget and citation lookup already
 work for any provider. One with an OpenAI-style chat completions API can mostly
-copy the Groq functions. `BRIEF_SCHEMA` is written in Gemini's schema format,
+copy the Groq functions. `BRIEF_SCHEMA`, in `digestlib/briefing.py`, is
+written in Gemini's schema format,
 and `_to_json_schema()` converts it for providers that take standard JSON
 Schema.
 

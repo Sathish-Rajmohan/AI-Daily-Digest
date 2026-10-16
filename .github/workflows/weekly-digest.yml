@@ -33,7 +33,8 @@ jobs:
     runs-on: ubuntu-latest
     # The download takes a minute or two, the model budget is 15 minutes
     # (TOTAL_BUDGET), and a run can wait up to 3 hours for the weekly
-    # deliver_at (MAX_HOLD in digest.py). The daily job's limit covers the same.
+    # deliver_at (MAX_HOLD in digestlib/schedule.py). The daily job's limit
+    # covers the same.
     timeout-minutes: 215
     steps:
       - name: Check out repo
