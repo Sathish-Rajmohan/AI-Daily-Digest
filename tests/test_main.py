@@ -401,6 +401,60 @@ def test_a_second_run_on_the_same_day_replaces_the_first(write_config, mail_env,
     assert saved["topics"][0]["overview"] == "Later overview."
 
 
+# --------------------------------------------------------------------------
+# skip_daily on the weekly edition's day
+# --------------------------------------------------------------------------
+
+def with_weekly(cfg, **weekly):
+    return {**cfg, "weekly": {"enabled": True, **weekly}}
+
+
+def today_name():
+    return digest.WEEKDAYS[datetime.now(timezone.utc).weekday()]
+
+
+def test_skip_daily_keeps_the_email_back_on_the_weekly_day_but_saves_the_stories(
+        write_config, mail_env, sent, fake_pipeline, capsys):
+    write_config(with_weekly(config(topic("Tech")), day=today_name(), skip_daily=True))
+    digest.main()
+
+    assert sent == []
+    # The weekly edition has no fact, so none is asked for.
+    assert not any(event[0] == "fact" for event in fake_pipeline.events)
+    _, saved = read_saved()
+    assert saved["sent_at"] is None and saved["fact"] is None
+    assert saved["topics"][0]["stories"] == written_brief("Tech")["stories"]
+    assert "skip_daily is set, so no daily email is sent" in capsys.readouterr().out
+
+
+def test_a_day_kept_back_is_read_by_the_weekly_edition(write_config, mail_env, sent, fake_pipeline):
+    write_config(with_weekly(config(topic("Tech")), day=today_name(), skip_daily=True))
+    digest.main()
+    [(day, saved)] = digest.load_saved_digests(digest.SAVE_DIR).items()
+    assert digest.week_stories({day: saved}, [day], "Tech")[0]["subheading"] == "Tech lead story"
+
+
+@pytest.mark.parametrize("weekly", [
+    {"skip_daily": True, "day": "other"},
+    {"skip_daily": False},
+    {},
+    {"skip_daily": True, "enabled": False},
+])
+def test_the_daily_email_goes_out_otherwise(write_config, mail_env, sent, fake_pipeline, weekly):
+    others = [d for d in digest.WEEKDAYS if d != today_name()]
+    day = others[0] if weekly.get("day") == "other" else today_name()
+    write_config(with_weekly(config(topic("Tech")), **{**weekly, "day": day}))
+    digest.main()
+    assert len(sent) == 1
+    assert read_saved()[1]["sent_at"] is not None
+
+
+def test_skip_daily_must_be_true_or_false(write_config):
+    write_config(with_weekly(config(topic("Tech")), skip_daily="yes"))
+    with pytest.raises(ValueError, match="'weekly.skip_daily'"):
+        digest.load_config()
+
+
 def test_the_saved_record_holds_only_what_the_email_shows():
     brief = {
         "overview": "Overview.",

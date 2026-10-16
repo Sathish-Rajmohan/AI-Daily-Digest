@@ -145,8 +145,9 @@ def _check_weekly(weekly):
     if not isinstance(weekly, dict):
         raise ValueError(f"{CONFIG_PATH}: 'weekly' must be an object")
 
-    if not isinstance(weekly.get("enabled", False), bool):
-        raise ValueError(f"{CONFIG_PATH}: 'weekly.enabled' must be true or false")
+    for key in ("enabled", "skip_daily"):
+        if not isinstance(weekly.get(key, False), bool):
+            raise ValueError(f"{CONFIG_PATH}: 'weekly.{key}' must be true or false")
 
     day = weekly.get("day", "Sunday")
     if not (isinstance(day, str) and day.strip().title() in WEEKDAYS):
@@ -2215,7 +2216,8 @@ SAVED_DIGEST_VERSION = 1
 def digest_record(topic_results, day, fact, sent_at, scheduled):
     """What the email said, as plain data: each topic's overview and stories
     with the sources they cite, and the fact. Nothing else from the run goes
-    in, so the file holds no more than the email did.
+    in, so the file holds no more than the email did. `sent_at` is None for a
+    digest kept back by skip_daily, which holds what the email would have said.
     """
     topics = []
     for name, brief, notice in topic_results:
@@ -2240,11 +2242,21 @@ def digest_record(topic_results, day, fact, sent_at, scheduled):
     return {
         "version": SAVED_DIGEST_VERSION,
         "date": day.isoformat(),
-        "sent_at": sent_at.astimezone(timezone.utc).isoformat(timespec="seconds"),
+        "sent_at": sent_at.astimezone(timezone.utc).isoformat(timespec="seconds") if sent_at else None,
         "trigger": "schedule" if scheduled else "manual",
         "topics": topics,
         "fact": fact,
     }
+
+
+def daily_skipped(config, day):
+    """True on the weekly edition's day when its "skip_daily" is set."""
+    weekly = config.get("weekly") or {}
+    return bool(
+        weekly.get("enabled", False)
+        and weekly.get("skip_daily", False)
+        and WEEKDAYS[day.weekday()] == weekly.get("day", "Sunday").strip().title()
+    )
 
 
 def save_digest(record):
@@ -2445,6 +2457,16 @@ def main():
     # A held digest is dated for the day it's delivered, which can differ from
     # the day it was written.
     now_local = deliver.astimezone(local_tz) if deliver else datetime.now(local_tz)
+
+    # On the weekly edition's day, skip_daily keeps this email back. The day's
+    # stories are still saved, so the weekly edition covers the day.
+    if daily_skipped(config, now_local.date()):
+        print(f"Model time used: {TOTAL_BUDGET - _budget_left():.0f}s of {TOTAL_BUDGET}s")
+        print("Today is the weekly edition's day and skip_daily is set, so no daily email is "
+              "sent. The day's stories are saved for the weekly edition.")
+        save_digest(digest_record(topic_results, now_local.date(), None, None, scheduled_run))
+        print("Done.")
+        return
 
     # The fact comes last so the topics use the time budget first. If it fails,
     # the email goes out without it.
